@@ -11,6 +11,11 @@ const DEFAULT_PORT_START = 11001
 const DEFAULT_MAX_DEPTH = 9
 const DEFAULT_DISCOVER_LIMIT = 30
 const DEFAULT_MIN_SCORE = 30
+const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
+const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
+const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
+const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
+const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
 
 const SKIP_DIR_NAMES = new Set([
   '.cache',
@@ -126,6 +131,7 @@ export async function runCli(argv, io = { stdin: process.stdin, stdout: process.
     const result = await smokeBridge({
       bridgeUrl: stringOption(options.bridge, DEFAULT_BRIDGE_URL),
       query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
+      mode: bridgeModeOption(options.mode ?? options['orchestration-mode'], BRIDGE_MODE_EVIDENCE_ONLY),
     })
     writeResult(result, options, io)
     return
@@ -141,6 +147,11 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     registerSources,
     smokeBridge,
     resolveServeInvocation,
+    checkBridgeHealth,
+    bridgeStartPlan,
+    startBridgeCommand,
+    waitForBridgeHealth,
+    selectBridgeSmokeMode,
     ...commands,
   }
   const output = io.stdout || process.stdout
@@ -152,17 +163,29 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
   const result = {
     command: 'quickstart',
     roots,
+    autoDiscover: false,
     selected: [],
     validated: [],
     started: null,
+    sourceUrls: [],
+    bridgeSetup: null,
     registered: null,
     smoked: null,
+    smokeMode: null,
     skipped: [],
   }
 
   try {
     output.write('llmwiki-bridge-start quickstart\n')
-    output.write('1) Discovering candidates without validation. Validation starts only after you choose candidates.\n')
+    output.write('This flow can start local Knowledge Source endpoints first. The agent bridge is optional.\n')
+    if (!await confirmQuickstart(prompter, '1) Auto-discover local LLMWiki/knowledge source folders?', true)) {
+      output.write('Skipped discovery. You can run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
+      result.skipped.push('discovery', 'selection', 'start', 'bridge-setup', 'register', 'smoke')
+      return result
+    }
+    result.autoDiscover = true
+
+    output.write('Discovering candidates without validation. Validation runs only if you start selected sources.\n')
     const discovery = await runtime.discoverCandidates({
       roots,
       maxDepth: intOption(options.depth, DEFAULT_MAX_DEPTH),
@@ -175,23 +198,29 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 
     if (!discovery.candidates.length) {
       output.write('No LLMWiki candidates found. Try --path DIR or --min-score 10 for generic Markdown folders.\n')
-      result.skipped.push('selection', 'validation', 'start', 'register', 'smoke')
+      result.skipped.push('selection', 'start', 'bridge-setup', 'register', 'smoke')
       return result
     }
 
     output.write('\nCandidates:\n')
     output.write(formatCandidates(discovery.candidates))
 
-    const selectionAnswer = await prompter.ask('Select candidates to validate/start (comma-separated ranks, "all", or "q"; default 1): ', '1')
+    const selectionAnswer = await prompter.ask('Select source folders to start (comma-separated ranks, "all", or "q"; default 1): ', '1')
     const selected = parseCandidateSelection(selectionAnswer, discovery.candidates)
     result.selected = selected.map(summarizeCandidateForFlow)
     if (!selected.length) {
-      output.write('Quickstart cancelled before validation.\n')
-      result.skipped.push('validation', 'start', 'register', 'smoke')
+      output.write('Quickstart cancelled before starting sources.\n')
+      result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
 
-    output.write(`\n2) Validating ${selected.length} selected candidate(s) with llmwiki-serve manifest.\n`)
+    if (!await confirmQuickstart(prompter, `2) Start ${selected.length} selected source server(s) on loopback? This validates each selected folder first.`, true)) {
+      output.write('Skipped source startup. No source servers were started.\n')
+      result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
+      return result
+    }
+
+    output.write(`\nValidating ${selected.length} selected candidate(s) with llmwiki-serve manifest.\n`)
     const validated = await Promise.all(selected.map((candidate) => runtime.validateCandidate(candidate, serveInvocation)))
     result.validated = validated.map(summarizeCandidateForFlow)
     for (const candidate of validated) {
@@ -203,14 +232,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
     const startable = validated.filter((candidate) => candidate.startable)
     if (!startable.length) {
-      output.write('No selected candidates validated successfully; stopping before start/register/smoke.\n')
-      result.skipped.push('start', 'register', 'smoke')
-      return result
-    }
-
-    if (!await confirmQuickstart(prompter, `3) Start ${startable.length} validated source server(s) on loopback?`, true)) {
-      output.write('Skipped start/register/smoke.\n')
-      result.skipped.push('start', 'register', 'smoke')
+      output.write('No selected candidates validated successfully; stopping before source startup or bridge setup.\n')
+      result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
     result.started = await runtime.startSources({
@@ -222,14 +245,35 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       configPath,
       logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
     })
+    result.sourceUrls = sourceUrlsFromStartedSources(result.started.sources)
     output.write(`Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}\n`)
+    output.write(formatStartedSourceUrls(result.started.sources))
+    output.write('You can use these source URLs directly from local tools. llmwiki-agent-bridge is optional; add it when you want source fan-out, A2A/MCP endpoints, runtime synthesis, or one normalized bridge artifact.\n')
 
-    const registerMode = boolOption(options.replace) ? 'replace' : 'merge'
-    if (!await confirmQuickstart(prompter, `4) Register started source(s) with ${bridgeUrl} (${registerMode} mode)?`, true)) {
-      output.write('Skipped register/smoke.\n')
+    if (!await confirmQuickstart(prompter, `3) Install/setup optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the local source URLs above are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
+      output.write('Skipped bridge setup. Quickstart complete with direct local source URL(s).\n')
+      output.write(formatStartedSourceUrls(result.started.sources))
+      result.skipped.push('bridge-setup', 'register', 'smoke')
+      return result
+    }
+
+    result.bridgeSetup = await guideBridgeSetup({
+      runtime,
+      prompter,
+      output,
+      options,
+      bridgeUrl,
+      logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
+    })
+
+    if (result.bridgeSetup.continueToBridge === false) {
+      output.write('Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.\n')
       result.skipped.push('register', 'smoke')
       return result
     }
+
+    const registerMode = boolOption(options.replace) ? 'replace' : 'merge'
+    output.write(`\nRegistering started source(s) with ${bridgeUrl} (${registerMode} mode).\n`)
     result.registered = await runtime.registerSources({
       bridgeUrl,
       configPath,
@@ -237,20 +281,96 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     output.write(`Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.\n`)
 
-    if (!await confirmQuickstart(prompter, '5) Run an evidence-only bridge smoke query?', true)) {
-      output.write('Skipped smoke.\n')
-      result.skipped.push('smoke')
-      return result
-    }
+    const smokePlan = await runtime.selectBridgeSmokeMode({ options, bridgeUrl, env: process.env })
+    result.smokeMode = smokePlan.mode
+    output.write(`Running bridge smoke in ${formatBridgeModeLabel(smokePlan.mode)} mode (${smokePlan.reason}).\n`)
     result.smoked = await runtime.smokeBridge({
       bridgeUrl,
       query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
+      mode: smokePlan.mode,
     })
     output.write(`Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}\n`)
     return result
   } finally {
     prompter.close()
   }
+}
+
+async function guideBridgeSetup({ runtime, prompter, output, options, bridgeUrl, logDir }) {
+  const existingHealth = await runtime.checkBridgeHealth(bridgeUrl)
+  if (existingHealth.ok) {
+    output.write(`llmwiki-agent-bridge is already reachable at ${bridgeUrl}.\n`)
+    return {
+      bridgeUrl,
+      executed: false,
+      continueToBridge: true,
+      health: existingHealth,
+    }
+  }
+
+  const plan = runtime.bridgeStartPlan(options)
+  const commandText = formatCommand(plan)
+  const result = {
+    bridgeUrl,
+    command: plan,
+    commandText,
+    executed: false,
+    continueToBridge: true,
+  }
+
+  output.write('\nllmwiki-agent-bridge setup\n')
+  output.write('The bridge is optional. Use it when you want one A2A/MCP-style endpoint for source fan-out and runtime-backed answers.\n')
+  output.write('Safe start command (no global install; npx uses the package cache, or a local checkout is used when available):\n')
+  output.write(`  ${commandText}\n`)
+
+  if (detectLlmRuntime(options).configured) {
+    output.write('An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.\n')
+  } else {
+    output.write('No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.\n')
+  }
+
+  if (await confirmQuickstart(prompter, 'Run this bridge command now as a detached local process?', false)) {
+    const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: detectLlmRuntime(options) })
+    Object.assign(result, { executed: true }, started)
+    output.write(`Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}\n`)
+    try {
+      const health = await runtime.waitForBridgeHealth(bridgeUrl, { timeoutMs: 10000 })
+      result.health = health
+      output.write(`llmwiki-agent-bridge is reachable at ${bridgeUrl}.\n`)
+    } catch (error) {
+      result.health = { ok: false, error: error.message, url: bridgeUrl }
+      output.write(`Bridge did not become reachable at ${bridgeUrl}: ${error.message}\n`)
+      result.continueToBridge = await confirmQuickstart(prompter, 'Continue with registration/smoke anyway?', false)
+    }
+    return result
+  }
+
+  output.write(`If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.\n`)
+  result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?`, false)
+  return result
+}
+
+export function formatCommand(plan) {
+  return [plan.command, ...(plan.args || [])]
+    .map((part) => (/\s/.test(part) ? `"${part.replaceAll('"', '\\"')}"` : part))
+    .join(' ')
+}
+
+function formatBridgeModeLabel(mode) {
+  return mode === 'delegated-runtime'
+    ? 'A2A delegated-runtime'
+    : 'A2A evidence-only'
+}
+
+function sourceUrlsFromStartedSources(sources = []) {
+  return sources.map((source) => source.url).filter(Boolean)
+}
+
+function formatStartedSourceUrls(sources = []) {
+  if (!sources.length) {
+    return 'No started source URLs were reported.\n'
+  }
+  return `Started local Knowledge Source URLs:\n${sources.map((source) => `- ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
 }
 
 function createQuickstartPrompter(io, { yes = false } = {}) {
@@ -1008,19 +1128,209 @@ function assertSafeSourceUrl(value) {
   return parsed.toString().replace(/\/+$/, '')
 }
 
-export async function smokeBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, query } = {}) {
+export function bridgeStartPlan(options = {}) {
+  const customCommand = stringOption(options.bridgeCommand ?? options['bridge-command'], '')
+  if (customCommand) {
+    return {
+      command: customCommand,
+      args: arrayOption(options.bridgeArg ?? options['bridge-arg']),
+      source: 'custom',
+    }
+  }
+
+  const siblingBridge = resolve(process.cwd(), '..', 'llmwiki-agent-bridge', 'bin', 'llmwiki-agent-bridge.mjs')
+  if (safeIsFile(siblingBridge)) {
+    return {
+      command: process.execPath,
+      args: [siblingBridge],
+      source: 'sibling-checkout',
+    }
+  }
+
+  const packageName = stringOption(options.bridgePackage ?? options['bridge-package'], DEFAULT_BRIDGE_PACKAGE_SPEC)
+  return {
+    command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    args: ['--yes', packageName],
+    packageName,
+    source: 'npx-package',
+  }
+}
+
+export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEFAULT_BRIDGE_URL, logDir = defaultLogDir(), runtime = detectLlmRuntime({}) } = {}) {
+  mkdirSync(logDir, { recursive: true })
+  const parsed = new URL(bridgeUrl)
+  const bridgeId = slug(`llmwiki-agent-bridge-${parsed.hostname}-${parsed.port || '80'}`)
+  const out = join(logDir, `${bridgeId}.out.log`)
+  const err = join(logDir, `${bridgeId}.err.log`)
+  const outFd = openSync(out, 'a')
+  const errFd = openSync(err, 'a')
+  const env = {
+    ...process.env,
+    LLMWIKI_AGENT_BRIDGE_HOST: parsed.hostname,
+    LLMWIKI_AGENT_BRIDGE_PORT: parsed.port || (parsed.protocol === 'https:' ? '443' : '80'),
+    ...(runtime.configured
+      ? {
+          LLMWIKI_AGENT_BRIDGE_BASE_URL: runtime.baseUrl,
+          LLMWIKI_AGENT_BRIDGE_MODEL: runtime.model,
+          LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE: runtime.profile,
+        }
+      : {}),
+  }
+  const child = spawn(plan.command, plan.args || [], {
+    detached: true,
+    env,
+    stdio: ['ignore', outFd, errFd],
+    windowsHide: true,
+  })
+  child.unref()
+  return {
+    command: plan.command,
+    args: plan.args || [],
+    processId: child.pid,
+    logs: { stdout: out, stderr: err },
+  }
+}
+
+export async function checkBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL) {
+  try {
+    const health = await fetchJson(new URL('/health', bridgeUrl), { timeoutMs: 3000 })
+    return { ok: true, status: health.status || 'reachable', url: bridgeUrl }
+  } catch (error) {
+    return { ok: false, error: error.message, url: bridgeUrl }
+  }
+}
+
+export async function waitForBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL, { timeoutMs = 15000, intervalMs = 500 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let health = await checkBridgeHealth(bridgeUrl)
+  while (!health.ok && Date.now() < deadline) {
+    await delay(intervalMs)
+    health = await checkBridgeHealth(bridgeUrl)
+  }
+  if (!health.ok) {
+    throw new Error(health.error || `Timed out waiting for ${bridgeUrl}`)
+  }
+  return health
+}
+
+export async function launchAgentBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, packageName = DEFAULT_BRIDGE_PACKAGE_SPEC, logDir = defaultLogDir(), runtime = detectLlmRuntime({}), timeoutMs = 15000 } = {}) {
+  const plan = bridgeStartPlan({ bridgePackage: packageName })
+  const started = startBridgeCommand(plan, { bridgeUrl, logDir, runtime })
+  let health
+  try {
+    health = await waitForBridgeHealth(bridgeUrl, { timeoutMs })
+  } catch (error) {
+    health = { ok: false, error: error.message, url: bridgeUrl }
+  }
+  return {
+    packageName,
+    ...started,
+    health,
+  }
+}
+
+export function detectLlmRuntime(options = {}, env = process.env) {
+  const baseUrl = stringOption(
+    options.llmEndpoint
+      ?? options['llm-endpoint']
+      ?? options.runtimeBaseUrl
+      ?? options['runtime-base-url']
+      ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL
+      ?? env.HERMES_BASE_URL
+      ?? env.OPENAI_BASE_URL,
+    '',
+  )
+  const model = stringOption(
+    options.llmModel
+      ?? options['llm-model']
+      ?? options.model
+      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL
+      ?? env.HERMES_MODEL
+      ?? env.OPENAI_MODEL,
+    'local-model',
+  )
+  const profile = stringOption(
+    options.runtimeProfile
+      ?? options['runtime-profile']
+      ?? env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE,
+    'generic',
+  )
+  return {
+    configured: Boolean(baseUrl),
+    baseUrl,
+    model,
+    profile,
+  }
+}
+
+function bridgeModeOption(value, fallback) {
+  const mode = stringOption(value, fallback)
+  if (!BRIDGE_ORCHESTRATION_MODES.has(mode)) {
+    throw new Error(`Bridge mode must be one of: ${[...BRIDGE_ORCHESTRATION_MODES].join(', ')}`)
+  }
+  return mode
+}
+
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '')
+}
+
+export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_BRIDGE_URL, env = process.env, inspectBridgeRuntime = inspectBridgeRuntimeConfiguration } = {}) {
+  const requestedMode = stringOption(options.mode ?? options['orchestration-mode'], '')
+  if (requestedMode) {
+    return { mode: bridgeModeOption(requestedMode, BRIDGE_MODE_EVIDENCE_ONLY), reason: 'requested with --mode' }
+  }
+
+  const runtimeInfo = detectLlmRuntime(options, env)
+  if (runtimeInfo.configured) {
+    return { mode: BRIDGE_MODE_DELEGATED_RUNTIME, reason: `explicit LLM endpoint configured (${runtimeInfo.baseUrl})` }
+  }
+
+  try {
+    const inspected = await inspectBridgeRuntime(bridgeUrl)
+    if (inspected.configured) {
+      return { mode: BRIDGE_MODE_DELEGATED_RUNTIME, reason: inspected.reason }
+    }
+    return { mode: BRIDGE_MODE_EVIDENCE_ONLY, reason: inspected.reason }
+  } catch {
+    return { mode: BRIDGE_MODE_EVIDENCE_ONLY, reason: 'no explicit LLM endpoint detected' }
+  }
+}
+
+async function inspectBridgeRuntimeConfiguration(bridgeUrl) {
+  const settings = await fetchJson(new URL('/settings.json', bridgeUrl), { timeoutMs: 2000 })
+  const connection = settings.runtimeConnection || {}
+  const baseUrl = String(connection.baseUrl || '')
+  const configuredBaseUrl = baseUrl
+    && baseUrl !== 'none'
+    && trimTrailingSlash(baseUrl) !== trimTrailingSlash(DEFAULT_BRIDGE_RUNTIME_BASE_URL)
+  if (connection.modelConfigured && (configuredBaseUrl || connection.apiKeyConfigured)) {
+    return { configured: true, reason: 'LLM endpoint configured in bridge settings' }
+  }
+  return { configured: false, reason: 'no explicit LLM endpoint detected in bridge settings' }
+}
+
+export async function smokeBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, query, mode = BRIDGE_MODE_EVIDENCE_ONLY } = {}) {
+  const smokeMode = bridgeModeOption(mode, BRIDGE_MODE_EVIDENCE_ONLY)
   const response = await fetchJson(new URL('/message:send', bridgeUrl), {
     method: 'POST',
-    body: JSON.stringify({ data: { query, mode: 'evidence-only' } }),
+    body: JSON.stringify({ data: { query, mode: smokeMode } }),
     headers: { 'content-type': 'application/json' },
     timeoutMs: 30000,
   })
   return {
     bridgeUrl,
     query,
+    mode: smokeMode,
     status: response.status,
     text: response.status?.message?.parts?.find((part) => part.kind === 'text')?.text || '',
   }
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms)
+  })
 }
 
 function readSourceConfig(configPath) {
@@ -1138,24 +1448,26 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--yes]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
-  llmwiki-bridge-start smoke [--bridge URL] [--query TEXT]
+  llmwiki-bridge-start smoke [--bridge URL] [--query TEXT] [--mode evidence-only|delegated-runtime|hybrid]
   llmwiki-bridge-start doctor [--bridge URL]
 
 Commands:
-  quickstart  Guided first-run flow: discover, choose, validate selected candidates, start, register, smoke.
+  quickstart  Guided first-run flow: discover, choose, start sources, optional bridge setup, register, smoke.
   discover  Find likely LLMWiki/Obsidian/Logseq/Dendron/Foam/Quartz roots.
   start     Start llmwiki-serve for explicit source paths and write a source config.
   register  Upsert started or explicit sources in llmwiki-agent-bridge settings.
-  smoke     Run a small evidence-only bridge query.
+  smoke     Run a small bridge query; defaults to evidence-only.
   doctor    Check local tool and bridge readiness.
 
 Discovery defaults to the current user's home directory and hides low-confidence generic folders.
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
+Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
+Bridge smoke defaults to evidence-only unless --mode or quickstart runtime detection selects another mode.
 `
 }
 

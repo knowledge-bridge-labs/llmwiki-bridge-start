@@ -16,9 +16,13 @@ coding-agent client can retrieve evidence.
   generated workspace folders.
 - Validate candidates through `llmwiki-serve manifest` when requested.
 - Start selected local sources on loopback ports.
+- Treat started `llmwiki-serve` source URLs as immediately useful even when the
+  user skips `llmwiki-agent-bridge`.
+- Make `llmwiki-agent-bridge` setup optional and explicit.
 - Upsert sources into an existing bridge registry without deleting unrelated
   sources.
-- Run an evidence-only smoke query against the bridge.
+- Run an A2A-style smoke query against the bridge, using delegated-runtime when
+  an explicit LLM endpoint is configured and evidence-only otherwise.
 
 ## Non-goals
 
@@ -66,6 +70,10 @@ source server.
   generic Markdown fallback discovery must require lowering `--min-score`.
 - `register` must merge by default and require explicit `--replace` to wipe the
   bridge registry.
+- `quickstart` must ask before discovery, support multi-select source startup,
+  and allow a successful direct-source-only exit before bridge setup.
+- `quickstart` must not start or install `llmwiki-agent-bridge` unless the user
+  explicitly opts in.
 - Source URLs with credentials or unsupported schemes must be rejected.
 - Tests must cover scoring, duplicate suppression, generated-folder filtering,
   supported-variant markers, default generic fallback behavior, manifest

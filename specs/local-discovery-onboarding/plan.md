@@ -11,8 +11,11 @@
    config.
 6. Register sources through the bridge settings endpoint with merge/upsert
    semantics.
-7. Add a bridge smoke command that uses evidence-only mode.
-8. Verify with unit tests, package dry-run, targeted local discovery, and a
+7. Add a guided quickstart flow that can stop after direct source startup or
+   continue into optional bridge setup.
+8. Add a bridge smoke command that uses evidence-only mode by default and
+   delegated-runtime when an explicit LLM endpoint is configured.
+9. Verify with unit tests, package dry-run, targeted local discovery, and a
    local source restart smoke.
 
 ## Risks

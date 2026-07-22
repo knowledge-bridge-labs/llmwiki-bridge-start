@@ -22,6 +22,12 @@
 - `discover --validate` manifest success and failure reporting using a
   controlled `llmwiki-serve manifest` invocation.
 - `start` refusal to launch a source when manifest validation fails.
+- Quickstart direct-source-only path: discover approval, multi-select, validate,
+  start, then skip bridge setup successfully while printing direct source URLs.
+- Quickstart bridge path: explicit bridge setup approval, merge registration,
+  and smoke mode selection.
+- LLM endpoint detection for delegated-runtime bridge smoke; evidence-only when
+  no explicit endpoint is configured.
 - Bridge registry upsert by URL.
 - Bridge registry upsert by stable ID when source ports move.
 - Credential-bearing source URL rejection.
@@ -33,4 +39,5 @@
 - Run targeted `discover --validate` against representative local source roots.
 - Start multiple local sources on loopback ports.
 - Verify `/health` and `/manifest` for started sources.
-- Run evidence-only bridge smoke using the existing bridge registry.
+- Run bridge smoke using the existing bridge registry, evidence-only by default
+  and delegated-runtime when an explicit LLM endpoint is configured.

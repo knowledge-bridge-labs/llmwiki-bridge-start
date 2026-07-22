@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scoreCandidate } from '../src/index.mjs'
+import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -37,10 +38,10 @@ test('parseYesNo handles defaulted and explicit answers', () => {
   assert.throws(() => parseYesNo('maybe'), /Expected yes or no/)
 })
 
-test('quickstart validates only selected candidates and merge-registers by default', async () => {
+test('quickstart can end after starting direct local source URLs without bridge setup', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['2', 'y', 'y', 'n']
+  const answers = ['y', '2', 'y', 'n']
   const io = {
     stdout,
     stderr: stdout,
@@ -112,10 +113,91 @@ test('quickstart validates only selected candidates and merge-registers by defau
   assert.equal(calls[0][1].validate, false)
   assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', 'second-wiki']])
   assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['second-wiki'])
-  assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
+  assert.equal(calls.some((call) => call[0] === 'register'), false)
   assert.equal(calls.some((call) => call[0] === 'smoke'), false)
-  assert.deepEqual(result.skipped, ['smoke'])
-  assert.match(io.stdout.text, /Validation starts only after you choose candidates/)
+  assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
+  assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+  assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
+  assert.match(io.stdout.text, /source URLs directly/)
+})
+
+test('quickstart generates bridge setup command without executing it and runs delegated smoke when configured', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', 'n', 'y']
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return {
+          command: 'npx',
+          args: ['--yes', 'llmwiki-agent-bridge@0.1.0'],
+          packageName: 'llmwiki-agent-bridge@0.1.0',
+        }
+      },
+      async startBridgeCommand(args) {
+        calls.push(['bridge-start', args])
+        throw new Error('bridge command should not run in this test')
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        return {
+          bridgeUrl: args.bridgeUrl,
+          replace: args.replace,
+          payload: { sources: [{ id: 'first-wiki', url: 'http://127.0.0.1:11001' }] },
+          response: { ok: true },
+        }
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        return { bridgeUrl: args.bridgeUrl, mode: args.mode, status: { state: 'completed' }, text: '' }
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan', 'register', 'smoke'])
+  assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
+  assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
+  assert.equal(result.smokeMode, 'delegated-runtime')
+  assert.deepEqual(result.skipped, [])
+  assert.equal(result.bridgeSetup.executed, false)
+  assert.match(stdout.text, /Safe start command/)
+  assert.match(stdout.text, /no global install/)
 })
 
 test('quickstart stops before start/register/smoke when selected validation fails', async () => {
@@ -163,8 +245,78 @@ test('quickstart stops before start/register/smoke when selected validation fail
   )
 
   assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate'])
-  assert.deepEqual(result.skipped, ['start', 'register', 'smoke'])
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
   assert.match(stdout.text, /No selected candidates validated successfully/)
+})
+
+test('detectLlmRuntime enables delegated-runtime when an LLM endpoint is configured', () => {
+  assert.equal(detectLlmRuntime({}, {}).configured, false)
+  const runtime = detectLlmRuntime({ 'llm-endpoint': 'http://127.0.0.1:8642/v1', 'llm-model': 'local-model' }, {})
+  assert.equal(runtime.configured, true)
+  assert.equal(runtime.baseUrl, 'http://127.0.0.1:8642/v1')
+  assert.equal(runtime.model, 'local-model')
+  assert.equal(runtime.profile, 'generic')
+})
+
+test('selectBridgeSmokeMode uses delegated only when runtime is explicit or bridge settings are configured', async () => {
+  const evidence = await selectBridgeSmokeMode({
+    env: {},
+    inspectBridgeRuntime: async () => ({ configured: false, reason: 'no explicit LLM endpoint detected in bridge settings' }),
+  })
+  assert.equal(evidence.mode, 'evidence-only')
+
+  const delegatedFromEnv = await selectBridgeSmokeMode({
+    env: { LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1' },
+    inspectBridgeRuntime: async () => {
+      throw new Error('settings should not be inspected when env is explicit')
+    },
+  })
+  assert.equal(delegatedFromEnv.mode, 'delegated-runtime')
+
+  const delegatedFromSettings = await selectBridgeSmokeMode({
+    env: {},
+    inspectBridgeRuntime: async () => ({ configured: true, reason: 'LLM endpoint configured in bridge settings' }),
+  })
+  assert.equal(delegatedFromSettings.mode, 'delegated-runtime')
+
+  const forced = await selectBridgeSmokeMode({ options: { mode: 'hybrid' }, env: {} })
+  assert.equal(forced.mode, 'hybrid')
+})
+
+test('smokeBridge sends requested orchestration mode', async (t) => {
+  let server
+  const receivedBody = new Promise((resolveBody) => {
+    server = createServer((request, response) => {
+      let raw = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk) => {
+        raw += chunk
+      })
+      request.on('end', () => {
+        resolveBody(JSON.parse(raw))
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ status: { state: 'completed', message: { parts: [{ kind: 'text', text: 'ok' }] } } }))
+      })
+    })
+  })
+  await new Promise((resolveListen) => {
+    server.listen(0, '127.0.0.1', resolveListen)
+  })
+  t.after(() => {
+    server.close()
+  })
+
+  const address = server.address()
+  const result = await smokeBridge({
+    bridgeUrl: `http://127.0.0.1:${address.port}`,
+    query: 'release readiness',
+    mode: 'delegated-runtime',
+  })
+  const body = await receivedBody
+
+  assert.equal(result.mode, 'delegated-runtime')
+  assert.equal(body.data.query, 'release readiness')
+  assert.equal(body.data.mode, 'delegated-runtime')
 })
 
 test('scoreCandidate recognizes native llmwiki shape', () => {
