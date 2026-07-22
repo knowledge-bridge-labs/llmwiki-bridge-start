@@ -1,0 +1,51 @@
+{
+  "name": "llmwiki-bridge-start",
+  "version": "0.0.1",
+  "private": false,
+  "type": "module",
+  "description": "Local adoption harness for connecting pre-built LLMWiki knowledge sources to agent bridges and coding-agent clients.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/knowledge-bridge-labs/llmwiki-bridge-start.git"
+  },
+  "bugs": {
+    "url": "https://github.com/knowledge-bridge-labs/llmwiki-bridge-start/issues"
+  },
+  "homepage": "https://knowledge-bridge-labs.github.io/llmwiki-docs/",
+  "keywords": [
+    "llmwiki",
+    "knowledge-source",
+    "agent-runtime",
+    "mcp",
+    "a2a",
+    "onboarding",
+    "bridge",
+    "codex",
+    "claude-code",
+    "cursor"
+  ],
+  "main": "./src/index.mjs",
+  "exports": "./src/index.mjs",
+  "bin": {
+    "llmwiki-bridge-start": "bin/llmwiki-bridge-start.mjs"
+  },
+  "files": [
+    "bin/llmwiki-bridge-start.mjs",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "packageManager": "npm@10.9.7",
+  "engines": {
+    "node": ">=22.12",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "lint": "node --check bin/llmwiki-bridge-start.mjs && node --check src/index.mjs && node --check test/discover.test.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run lint && npm test && npm run pack:dry-run",
+    "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
+    "audit": "npm audit --omit=dev"
+  }
+}

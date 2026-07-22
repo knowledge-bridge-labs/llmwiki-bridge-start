@@ -1,0 +1,7 @@
+node_modules/
+.llmwiki-bridge-start/
+*.tgz
+.env
+.env.*
+.DS_Store
+Thumbs.db
