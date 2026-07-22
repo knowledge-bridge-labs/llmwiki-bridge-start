@@ -26,6 +26,9 @@
 - `discover --validate` manifest success and failure reporting using a
   controlled `llmwiki-serve manifest` invocation.
 - `start` refusal to launch a source when manifest validation fails.
+- CLI dispatch paths: `llmwiki-bridge-start` starts quickstart by default,
+  explicit `quickstart` remains equivalent, and explicit `discover` remains the
+  scriptable listing command.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,

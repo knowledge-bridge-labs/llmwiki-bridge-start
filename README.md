@@ -11,6 +11,7 @@ sources with a local bridge when requested, and runs bridge smoke checks.
 ## Quick Prototype
 
 ```bash
+npx llmwiki-bridge-start@latest
 npx llmwiki-bridge-start@latest quickstart --workspace
 npx llmwiki-bridge-start@latest discover --home
 npx llmwiki-bridge-start@latest discover --path . --validate
@@ -19,17 +20,18 @@ npx llmwiki-bridge-start@latest register --bridge http://127.0.0.1:8788 --config
 npx llmwiki-bridge-start@latest smoke --bridge http://127.0.0.1:8788
 ```
 
-`quickstart` is the bounded first-run flow. It asks whether to discover local
-source folders, lets you multi-select candidates, validates selected folders
-only when you choose to start them, starts loopback source URLs, then explains
-that those URLs can be used directly without `llmwiki-agent-bridge`. Bridge
-setup is optional: if you opt in, quickstart uses an already running bridge or
-prints a safe start command such as `npx --yes llmwiki-agent-bridge@0.1.0`
-that does not install a global package. Quickstart runs that command only after
-a second explicit approval. Once a bridge is running, it merge-registers the
-started sources and runs an A2A-style smoke request. If an explicit LLM endpoint
-is configured, smoke uses delegated-runtime mode; otherwise it uses
-evidence-only mode.
+Running `npx llmwiki-bridge-start@latest` with no subcommand starts the bounded
+first-run quickstart flow; `quickstart` remains an explicit equivalent. It asks
+whether to discover local source folders, lets you multi-select candidates,
+validates selected folders only when you choose to start them, starts loopback
+source URLs, then explains that those URLs can be used directly without
+`llmwiki-agent-bridge`. Bridge setup is optional: if you opt in, quickstart uses
+an already running bridge or prints a safe start command such as
+`npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
+Quickstart runs that command only after a second explicit approval. Once a
+bridge is running, it merge-registers the started sources and runs an A2A-style
+smoke request. If an explicit LLM endpoint is configured, smoke uses
+delegated-runtime mode; otherwise it uses evidence-only mode.
 
 Default discovery scans the user home directory unless `--path`, `--cwd`, or
 `--workspace` is supplied. The scanner prefers optional local tools such as
@@ -72,7 +74,7 @@ longer compatibility notes and non-goals.
 
 | Command | Purpose |
 | --- | --- |
-| `quickstart` | Guided first-run flow: optional discover, multi-select, validate/start sources, optional bridge setup, register, and A2A-style smoke. |
+| no subcommand / `quickstart` | Guided first-run flow: optional discover, multi-select, validate/start sources, optional bridge setup, register, and A2A-style smoke. |
 | `discover` | Find local LLMWiki/Obsidian/Logseq/Foam/Dendron/Quartz/generic Markdown candidates. |
 | `start` | Start `llmwiki-serve` on one or more selected local wiki paths. |
 | `register` | Upsert started or existing source URLs into `llmwiki-agent-bridge`. Use `--replace` only when intentionally replacing the registry. |

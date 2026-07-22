@@ -70,6 +70,9 @@ source server.
   generic Markdown fallback discovery must require lowering `--min-score`.
 - `register` must merge by default and require explicit `--replace` to wipe the
   bridge registry.
+- Invoking `llmwiki-bridge-start` without a subcommand must start the
+  quickstart flow; explicit `quickstart` remains equivalent and explicit
+  `discover` remains available for scriptable candidate listing.
 - `quickstart` must ask before discovery, support multi-select source startup,
   and allow a successful direct-source-only exit before bridge setup.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user

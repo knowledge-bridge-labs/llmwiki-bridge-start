@@ -6,13 +6,71 @@ import { join } from 'node:path'
 import { Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
+import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
   assert.equal(parsed.command, 'discover')
   assert.deepEqual(parsed.options.path, ['a', 'b'])
   assert.equal(parsed.options.validate, true)
+})
+
+test('runCli starts quickstart when no subcommand is provided', async () => {
+  const stdout = captureWritable()
+  const prompts = []
+  await runCli([], {
+    stdout,
+    stderr: stdout,
+    async prompt(question, fallback) {
+      prompts.push({ question, fallback })
+      return 'n'
+    },
+  })
+
+  assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
+  assert(stdout.text.includes('Skipped discovery.'))
+  assert.equal(prompts.length, 1)
+  assert.match(prompts[0].question, /Auto-discover/)
+})
+
+test('runCli keeps explicit quickstart available', async () => {
+  const stdout = captureWritable()
+  const prompts = []
+  await runCli(['quickstart'], {
+    stdout,
+    stderr: stdout,
+    async prompt(question, fallback) {
+      prompts.push({ question, fallback })
+      return 'n'
+    },
+  })
+
+  assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
+  assert(stdout.text.includes('Skipped discovery.'))
+  assert.equal(prompts.length, 1)
+  assert.match(prompts[0].question, /Auto-discover/)
+})
+
+test('runCli keeps explicit discover as the scriptable listing command', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-runcli-discover-'))
+  mkdirSync(join(root, 'concepts'))
+  writeFileSync(join(root, 'index.md'), '---\nwiki_title: Run CLI Wiki\nreview_state: approved\nsource_refs: [SRC]\n---\n# Run CLI Wiki\n')
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const stdout = captureWritable()
+  await runCli(['discover', '--path', root, '--json'], {
+    stdout,
+    stderr: captureWritable(),
+    async prompt() {
+      throw new Error('discover should not prompt')
+    },
+  })
+
+  const result = JSON.parse(stdout.text)
+  assert.equal(result.roots[0], root)
+  assert(result.candidates.some((candidate) => candidate.path === root))
+  assert(result.candidates.find((candidate) => candidate.path === root).signals.includes('llmwiki-root:hot+index-or-overview'))
 })
 
 test('parseCandidateSelection supports defaults, lists, all, cancel, and bounds checks', () => {

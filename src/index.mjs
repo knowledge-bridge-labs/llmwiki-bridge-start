@@ -177,7 +177,7 @@ export async function runCli(argv, io = { stdin: process.stdin, stdout: process.
     io.stdout.write(helpText())
     return
   }
-  if (command === 'quickstart') {
+  if (!command || command === 'quickstart') {
     const json = boolOption(options.json)
     const result = await quickstart(options, json ? { ...io, stdout: io.stderr || io.stdout } : io)
     if (json) {
@@ -185,7 +185,7 @@ export async function runCli(argv, io = { stdin: process.stdin, stdout: process.
     }
     return
   }
-  if (!command || command === 'discover') {
+  if (command === 'discover') {
     const roots = discoverRootsFromOptions(options)
     const candidates = await discoverCandidates({
       roots,
@@ -2033,6 +2033,7 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--yes]
   llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001]
@@ -2041,7 +2042,7 @@ Usage:
   llmwiki-bridge-start doctor [--bridge URL]
 
 Commands:
-  quickstart  Guided first-run flow: discover, choose, start sources, optional bridge setup, register, smoke.
+  quickstart  Guided first-run flow; also the default when no subcommand is provided.
   discover  Find likely LLMWiki/Obsidian/Logseq/Dendron/Foam/Quartz roots.
   start     Start llmwiki-serve for explicit source paths and write a source config.
   register  Upsert started or explicit sources in llmwiki-agent-bridge settings.
