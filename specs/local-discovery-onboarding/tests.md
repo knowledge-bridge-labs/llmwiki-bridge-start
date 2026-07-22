@@ -10,6 +10,10 @@
 - Nested `wiki/` preference for non-app source containers.
 - Generated smoke artifact filtering.
 - `.llmwiki-work` internal `input/`, `sources/`, and e2e filtering.
+- Fast discovery prefiltering through an injected scanner so tests do not
+  depend on local OS tool availability.
+- JavaScript fallback scanner inclusion of marker-shaped roots and exclusion of
+  generated/dependency folders.
 - App-root preference over direct child `wiki/`.
 - Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
   Quartz source variants at the default discovery threshold.

@@ -4,24 +4,30 @@
    implementation.
 2. Implement discovery scoring for native LLMWiki/OpenWiki roots and common
    Markdown app markers.
-3. Add default filters for dependency, cache, build, smoke, variant, and
-   generated workspace internals.
-4. Validate candidates by invoking `llmwiki-serve manifest`.
-5. Start selected sources through `llmwiki-serve serve` and write a local source
+3. Add a fast candidate-directory prefilter before scoring, preferring local
+   OS tools such as `fd`/`rg` when available and falling back to deterministic
+   JavaScript traversal.
+4. Add default filters for dependency, cache, build, examples, archives,
+   runtime logs, smoke, variant, transient download/editor, and generated
+   workspace internals.
+5. Validate candidates by invoking `llmwiki-serve manifest`.
+6. Start selected sources through `llmwiki-serve serve` and write a local source
    config.
-6. Register sources through the bridge settings endpoint with merge/upsert
+7. Register sources through the bridge settings endpoint with merge/upsert
    semantics.
-7. Add a guided quickstart flow that can stop after direct source startup or
+8. Add a guided quickstart flow that can stop after direct source startup or
    continue into optional bridge setup.
-8. Add a bridge smoke command that uses evidence-only mode by default and
+9. Add a bridge smoke command that uses evidence-only mode by default and
    delegated-runtime when an explicit LLM endpoint is configured.
-9. Verify with unit tests, package dry-run, targeted local discovery, and a
+10. Verify with unit tests, package dry-run, targeted local discovery, and a
    local source restart smoke.
 
 ## Risks
 
-- Full-home scans can be slow on large machines; keep validation opt-in and add
-  narrowing flags.
+- Full-home scans can be slow on large machines; keep validation opt-in, use a
+  marker prefilter before scoring, skip transient/generated roots by default,
+  and rely on explicit `--path` or lowered `--min-score` for skipped/example
+  folders and broad fallback searches.
 - App-style vault roots and nested `wiki/` projections can duplicate each other;
   prefer the app root by default.
 - Medium-confidence app markers can identify a vault that the installed

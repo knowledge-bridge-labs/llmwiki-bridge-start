@@ -2,6 +2,7 @@
 
 - [x] Create npm package scaffold.
 - [x] Add discovery scoring and filters.
+- [x] Add fast discovery prefilter with OS-tool preference and JS fallback.
 - [x] Add manifest validation.
 - [x] Add source start command.
 - [x] Add bridge register command.

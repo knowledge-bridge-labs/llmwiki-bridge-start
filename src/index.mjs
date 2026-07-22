@@ -11,6 +11,9 @@ const DEFAULT_PORT_START = 11001
 const DEFAULT_MAX_DEPTH = 9
 const DEFAULT_DISCOVER_LIMIT = 30
 const DEFAULT_MIN_SCORE = 30
+const FAST_DISCOVERY_EXTRA_DEPTH = 4
+const FAST_DISCOVERY_TIMEOUT_MS = 30000
+const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
@@ -18,28 +21,71 @@ const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
 
 const SKIP_DIR_NAMES = new Set([
+  '.antigravity',
+  '.angular',
+  '.bun',
   '.cache',
+  '.cargo',
+  '.claude',
+  '.codex',
+  '.cursor',
+  '.dart_tool',
+  '.docker',
+  '.gradle',
   '.git',
   '.hg',
+  '.idea',
+  '.ipynb_checkpoints',
+  '.next',
+  '.npm',
+  '.nuget',
+  '.nx',
+  '.parcel-cache',
+  '.pnpm-store',
   '.mypy_cache',
   '.pytest_cache',
   '.ruff_cache',
+  '.rustup',
+  '.runtime-logs',
+  '.serverless',
+  '.svelte-kit',
   '.svn',
+  '.terraform',
+  '.tox',
+  '.turbo',
+  '.tmp',
   '.venv',
+  '.vercel',
+  '.vscode',
+  '.vscode-test',
+  '.yarn',
+  '_worktrees',
   '__pycache__',
+  '__fixtures__',
   'appdata',
   'build',
+  'cache',
+  'caches',
+  'coverage',
   'dist',
+  'downloads',
+  'examples',
+  'fixtures',
   'logs',
   'node_modules',
   'output',
   'program files',
   'program files (x86)',
   'smoke',
+  'temp',
+  'test',
+  'tests',
+  'tmp',
   'uploads',
   'venv',
   'variant-smoke',
   'variants',
+  'vendor',
   'windows',
 ])
 
@@ -68,6 +114,61 @@ const QUARTZ_CONFIGS = [
   'quartz.config.js',
   'quartz.config.yaml',
   'quartz.config.yml',
+]
+
+const FAST_DISCOVERY_MARKER_GLOBS = [
+  '.wiki-compiler.json',
+  'hot.md',
+  'graph/graph.json',
+  '.obsidian/**',
+  'logseq/config.edn',
+  'dendron.yml',
+  '.foam/**',
+  'quartz.config.ts',
+  'quartz.config.js',
+  'quartz.config.yaml',
+  'quartz.config.yml',
+  ...LLMWIKI_TYPED_DIRS.map((name) => `${name}/**/*.md`),
+  ...LLMWIKI_TYPED_DIRS.map((name) => `${name}/**/*.org`),
+]
+
+const FAST_DISCOVERY_GENERIC_GLOBS = [
+  '*.md',
+  '**/*.md',
+  '*.org',
+  '**/*.org',
+  '.vscode/extensions.json',
+]
+
+const FAST_DISCOVERY_EXCLUDE_GLOBS = [
+  '!AppData/**',
+  '!Applications/**',
+  '!Library/**',
+  '!System/**',
+  '!Windows/**',
+  '!Program Files/**',
+  '!Program Files (x86)/**',
+  '!.cursor-tutor*/**',
+  '!node_modules/**',
+  '!.git/**',
+  '!.hg/**',
+  '!.svn/**',
+  '!dist/**',
+  '!Downloads/**',
+  '!build/**',
+  '!logs/**',
+  '!output/**',
+  '!uploads/**',
+  '!venv/**',
+  '!.venv/**',
+  '!.cache/**',
+  '!__pycache__/**',
+  '!smoke/**',
+  '!variant-smoke/**',
+  '!variants/**',
+  '!.llmwiki-work/e2e-public/**',
+  '!.llmwiki-work/input/**',
+  '!.llmwiki-work/sources/**',
 ]
 
 export async function runCli(argv, io = { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }) {
@@ -566,14 +667,23 @@ function discoverRootsFromOptions(options) {
   return [homedir()]
 }
 
-export async function discoverCandidates({ roots, maxDepth = DEFAULT_MAX_DEPTH, limit = DEFAULT_DISCOVER_LIMIT, minScore = DEFAULT_MIN_SCORE, validate = false, serveInvocation = resolveServeInvocation({}) } = {}) {
+export async function discoverCandidates({
+  roots,
+  maxDepth = DEFAULT_MAX_DEPTH,
+  limit = DEFAULT_DISCOVER_LIMIT,
+  minScore = DEFAULT_MIN_SCORE,
+  validate = false,
+  serveInvocation = resolveServeInvocation({}),
+  scanner = scanCandidateDirectories,
+} = {}) {
   const discovered = new Map()
   for (const root of roots || [homedir()]) {
     const resolvedRoot = resolve(root)
     if (!safeIsDirectory(resolvedRoot)) {
       continue
     }
-    for (const path of walkDirectories(resolvedRoot, maxDepth)) {
+    const scannedDirectories = await Promise.resolve(scanner({ root: resolvedRoot, maxDepth, minScore }))
+    for (const path of normalizeScannedCandidateDirectories(scannedDirectories, resolvedRoot, maxDepth)) {
       const scored = scoreCandidate(path)
       if (scored.score >= minScore) {
         addOrUpdateCandidate(discovered, scored)
@@ -598,6 +708,477 @@ export async function discoverCandidates({ roots, maxDepth = DEFAULT_MAX_DEPTH, 
     )
   }
   return { roots: roots || [homedir()], count: candidates.length, minScore, candidates }
+}
+
+export function scanCandidateDirectories({ root = homedir(), maxDepth = DEFAULT_MAX_DEPTH, minScore = DEFAULT_MIN_SCORE, preferExternalTools = true } = {}) {
+  const resolvedRoot = resolve(root)
+  if (!safeIsDirectory(resolvedRoot)) {
+    return []
+  }
+
+  if (preferExternalTools) {
+    const toolEntries = scanCandidateDirectoryEntriesWithExternalTool(resolvedRoot, maxDepth, minScore)
+    if (toolEntries !== null) {
+      return materializeCandidateDirectories(toolEntries, resolvedRoot, maxDepth, minScore)
+    }
+  }
+
+  return scanCandidateDirectoriesWithJavascript(resolvedRoot, maxDepth, minScore)
+}
+
+function normalizeScannedCandidateDirectories(scannedDirectories, root, maxDepth) {
+  const normalized = new Set()
+  for (const entry of scannedDirectories || []) {
+    const path = typeof entry === 'string' ? entry : entry?.path
+    if (!path) {
+      continue
+    }
+    addCandidateDirectory(normalized, path, root, maxDepth)
+  }
+  return [...normalized].sort((left, right) => left.localeCompare(right))
+}
+
+function scanCandidateDirectoryEntriesWithExternalTool(root, maxDepth, minScore) {
+  const fdCommand = findAvailableCommand(['fd', 'fdfind'])
+  if (fdCommand) {
+    const fdEntries = scanCandidateDirectoryEntriesWithFd(fdCommand, root, maxDepth, minScore)
+    if (fdEntries !== null) {
+      return fdEntries
+    }
+  }
+
+  const rgCommand = findAvailableCommand(['rg'])
+  if (rgCommand) {
+    const rgEntries = scanCandidateDirectoryEntriesWithRipgrep(rgCommand, root, maxDepth, minScore)
+    if (rgEntries !== null) {
+      return rgEntries
+    }
+  }
+
+  return null
+}
+
+function scanCandidateDirectoryEntriesWithFd(command, root, maxDepth, minScore) {
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH + 2
+  const baseArgs = [
+    '--hidden',
+    '--no-ignore',
+    '--color',
+    'never',
+    '--max-depth',
+    String(scanDepth),
+    '--full-path',
+    ...fdExcludeArgs(),
+  ]
+  const fileLines = runDiscoveryCommandLines(command, [
+    ...baseArgs,
+    '--type',
+    'f',
+    fdDiscoveryFilePattern({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (fileLines === null) {
+    return null
+  }
+  const directoryLines = runDiscoveryCommandLines(command, [
+    ...baseArgs,
+    '--type',
+    'd',
+    fdDiscoveryDirectoryPattern({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (directoryLines === null) {
+    return null
+  }
+  return [
+    ...fileLines.map((path) => ({ path, type: 'file' })),
+    ...directoryLines.map((path) => ({ path, type: 'directory' })),
+  ]
+}
+
+function scanCandidateDirectoryEntriesWithRipgrep(command, root, maxDepth, minScore) {
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH + 2
+  const lines = runDiscoveryCommandLines(command, [
+    '--files',
+    '--hidden',
+    '--no-ignore',
+    '--no-messages',
+    '--color',
+    'never',
+    '--max-depth',
+    String(scanDepth),
+    ...ripgrepGlobArgs({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (lines === null) {
+    return null
+  }
+  return lines.map((path) => ({ path, type: 'file' }))
+}
+
+function scanCandidateDirectoriesWithJavascript(root, maxDepth, minScore) {
+  const entries = []
+  const markerCache = new Map()
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH
+  const stack = [{ path: root, depth: 0 }]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current || current.depth > scanDepth || shouldSkipDir(current.path, current.depth === 0)) {
+      continue
+    }
+
+    if (hasImmediateCandidateMarker(current.path, markerCache, minScore)) {
+      entries.push({ path: current.path, type: 'directory' })
+    }
+
+    let children = []
+    try {
+      children = readdirSync(current.path, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const child of children) {
+      const childPath = join(current.path, child.name)
+      if (child.isDirectory()) {
+        if (isDiscoveryDirectoryMarker(child.name, minScore)) {
+          entries.push({ path: childPath, type: 'directory' })
+        }
+        if (!shouldSkipDir(childPath) && current.depth < scanDepth) {
+          stack.push({ path: childPath, depth: current.depth + 1 })
+        }
+      } else if (child.isFile() && (
+        isDiscoveryFileMarker(child.name, minScore)
+        || (isMarkdownOrOrgFile(child.name) && LLMWIKI_TYPED_DIRS.includes(basename(current.path).toLowerCase()))
+      )) {
+        entries.push({ path: childPath, type: 'file' })
+      }
+    }
+  }
+  return materializeCandidateDirectories(entries, root, maxDepth, minScore)
+}
+
+function materializeCandidateDirectories(entries, root, maxDepth, minScore) {
+  const candidates = new Set()
+  const markerCache = new Map()
+  if (hasImmediateCandidateMarker(root, markerCache, minScore)) {
+    addCandidateDirectory(candidates, root, root, maxDepth)
+  }
+
+  for (const entry of entries) {
+    const path = resolveScannedPath(root, entry.path)
+    if (!isPathAtOrBelowRoot(path, root)) {
+      continue
+    }
+    if (entry.type === 'directory') {
+      addCandidateDirectoriesFromScannedDirectory(candidates, path, root, maxDepth, minScore, markerCache)
+    } else {
+      addCandidateDirectoriesFromScannedFile(candidates, path, root, maxDepth, minScore, markerCache)
+    }
+  }
+
+  return [...candidates].sort((left, right) => left.localeCompare(right))
+}
+
+function addCandidateDirectoriesFromScannedDirectory(candidates, path, root, maxDepth, minScore, markerCache) {
+  const lower = basename(path).toLowerCase()
+  if (lower === '.obsidian' || lower === '.foam' || lower === 'logseq' || (minScore <= 10 && (lower === 'pages' || lower === 'journals' || lower === '.vscode'))) {
+    addCandidateDirectory(candidates, dirname(path), root, maxDepth)
+  }
+  if (LLMWIKI_TYPED_DIRS.includes(lower)) {
+    addCandidateDirectory(candidates, dirname(path), root, maxDepth)
+  }
+  if (minScore <= 10 && SOURCE_LIKE_DIR_NAMES.has(lower)) {
+    addCandidateDirectory(candidates, path, root, maxDepth)
+  }
+  if (hasImmediateCandidateMarker(path, markerCache, minScore)) {
+    addCandidateDirectory(candidates, path, root, maxDepth)
+  }
+}
+
+function addCandidateDirectoriesFromScannedFile(candidates, path, root, maxDepth, minScore, markerCache) {
+  const lower = basename(path).toLowerCase()
+  const parent = dirname(path)
+  const parentBase = basename(parent).toLowerCase()
+
+  if (lower === '.wiki-compiler.json' || lower === 'dendron.yml' || lower === 'hot.md' || (minScore <= 10 && HUB_FILES.includes(lower)) || QUARTZ_CONFIGS.includes(lower)) {
+    addCandidateDirectory(candidates, parent, root, maxDepth)
+  }
+  if (lower === 'config.edn' && parentBase === 'logseq') {
+    addCandidateDirectory(candidates, dirname(parent), root, maxDepth)
+  }
+  if (lower === 'extensions.json' && parentBase === '.vscode' && minScore <= 10) {
+    addCandidateDirectory(candidates, dirname(parent), root, maxDepth)
+  }
+  if (lower === 'graph.json' && parentBase === 'graph') {
+    addCandidateDirectory(candidates, dirname(parent), root, maxDepth)
+  }
+
+  addAppMarkerAncestor(candidates, path, root, maxDepth, '.obsidian')
+  addAppMarkerAncestor(candidates, path, root, maxDepth, '.foam')
+
+  if (isMarkdownOrOrgFile(lower)) {
+    addMarkdownCandidateDirectories(candidates, path, root, maxDepth, minScore, markerCache)
+  }
+}
+
+function addMarkdownCandidateDirectories(candidates, path, root, maxDepth, minScore, markerCache) {
+  let current = dirname(path)
+  const lowerFile = basename(path).toLowerCase()
+  if (lowerFile === 'hot.md' || (minScore <= 10 && HUB_FILES.includes(lowerFile))) {
+    addCandidateDirectory(candidates, current, root, maxDepth)
+  }
+
+  for (let depth = 0; depth <= FAST_DISCOVERY_EXTRA_DEPTH && isPathAtOrBelowRoot(current, root); depth += 1) {
+    const lower = basename(current).toLowerCase()
+    if (LLMWIKI_TYPED_DIRS.includes(lower)) {
+      addCandidateDirectory(candidates, dirname(current), root, maxDepth)
+    }
+    if (SOURCE_LIKE_DIR_NAMES.has(lower) || minScore <= 10 || hasImmediateCandidateMarker(current, markerCache, minScore)) {
+      addCandidateDirectory(candidates, current, root, maxDepth)
+    }
+    if (normalizePath(current) === normalizePath(root)) {
+      break
+    }
+    current = dirname(current)
+  }
+}
+
+function addAppMarkerAncestor(candidates, path, root, maxDepth, markerName) {
+  let current = dirname(path)
+  while (isPathAtOrBelowRoot(current, root)) {
+    if (basename(current).toLowerCase() === markerName) {
+      addCandidateDirectory(candidates, dirname(current), root, maxDepth)
+      return
+    }
+    if (normalizePath(current) === normalizePath(root)) {
+      return
+    }
+    current = dirname(current)
+  }
+}
+
+function addCandidateDirectory(candidates, path, root, maxDepth) {
+  const resolved = resolve(path)
+  if (!safeIsDirectory(resolved) || !isPathAtOrBelowRoot(resolved, root)) {
+    return
+  }
+  const isRoot = normalizePath(resolved) === normalizePath(root)
+  if (directoryDepthFromRoot(resolved, root) > maxDepth || shouldSkipDir(resolved, isRoot) || hasSkippedPathSegment(resolved, root)) {
+    return
+  }
+  candidates.add(resolved)
+}
+
+function hasImmediateCandidateMarker(path, cache = new Map(), minScore = DEFAULT_MIN_SCORE) {
+  const key = normalizePath(path)
+  if (cache.has(key)) {
+    return cache.get(key)
+  }
+  const names = immediateNames(path)
+  const lowerNames = new Set([...names].map((name) => name.toLowerCase()))
+  const result = (
+    lowerNames.has('.wiki-compiler.json')
+    || lowerNames.has('.obsidian')
+    || lowerNames.has('.foam')
+    || lowerNames.has('logseq')
+    || lowerNames.has('dendron.yml')
+    || lowerNames.has('graph')
+    || lowerNames.has('hot.md')
+    || (minScore <= 10 && lowerNames.has('.vscode'))
+    || (minScore <= 10 && HUB_FILES.some((name) => lowerNames.has(name)))
+    || QUARTZ_CONFIGS.some((name) => lowerNames.has(name))
+    || LLMWIKI_TYPED_DIRS.some((name) => lowerNames.has(name))
+    || (minScore <= 10 && lowerNames.has('pages') && lowerNames.has('journals'))
+    || (minScore <= 10 && SOURCE_LIKE_DIR_NAMES.has(basename(path).toLowerCase()))
+  )
+  cache.set(key, result)
+  return result
+}
+
+function isDiscoveryFileMarker(name, minScore = DEFAULT_MIN_SCORE) {
+  const lower = name.toLowerCase()
+  return (
+    (minScore <= 10 && isMarkdownOrOrgFile(lower))
+    || lower === '.wiki-compiler.json'
+    || lower === 'dendron.yml'
+    || lower === 'config.edn'
+    || lower === 'graph.json'
+    || (minScore <= 10 && lower === 'extensions.json')
+    || lower === 'hot.md'
+    || (minScore <= 10 && HUB_FILES.includes(lower))
+    || QUARTZ_CONFIGS.includes(lower)
+  )
+}
+
+function isDiscoveryDirectoryMarker(name, minScore = DEFAULT_MIN_SCORE) {
+  const lower = name.toLowerCase()
+  return (
+    lower === '.obsidian'
+    || lower === '.foam'
+    || (minScore <= 10 && lower === '.vscode')
+    || lower === 'logseq'
+    || (minScore <= 10 && lower === 'pages')
+    || (minScore <= 10 && lower === 'journals')
+    || (minScore <= 10 && SOURCE_LIKE_DIR_NAMES.has(lower))
+  )
+}
+
+function isMarkdownOrOrgFile(name) {
+  const lower = name.toLowerCase()
+  return lower.endsWith('.md') || lower.endsWith('.org')
+}
+
+const SOURCE_LIKE_DIR_NAMES = new Set(['wiki', 'llmwiki', 'openwiki', 'vault'])
+const COMMAND_AVAILABILITY = new Map()
+
+function findAvailableCommand(commands) {
+  for (const command of commands) {
+    if (COMMAND_AVAILABILITY.has(command)) {
+      if (COMMAND_AVAILABILITY.get(command)) {
+        return command
+      }
+      continue
+    }
+    const result = spawnSync(command, ['--version'], {
+      stdio: 'ignore',
+      timeout: 1500,
+      windowsHide: true,
+    })
+    const available = !result.error && result.status === 0
+    COMMAND_AVAILABILITY.set(command, available)
+    if (available) {
+      return command
+    }
+  }
+  return null
+}
+
+function runDiscoveryCommandLines(command, args, root) {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: FAST_DISCOVERY_MAX_BUFFER,
+    timeout: FAST_DISCOVERY_TIMEOUT_MS,
+    windowsHide: true,
+  })
+  if (result.error || ![0, 1, 2].includes(result.status)) {
+    return null
+  }
+  return String(result.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => resolveScannedPath(root, line))
+}
+
+function resolveScannedPath(root, path) {
+  return isAbsolute(path) ? resolve(path) : resolve(root, path)
+}
+
+function fdExcludeArgs() {
+  return [...SKIP_DIR_NAMES].flatMap((name) => ['--exclude', name])
+}
+
+function fdDiscoveryFilePattern({ includeGenericMarkdown = false } = {}) {
+  const filePatterns = [
+    '\\.wiki-compiler\\.json',
+    'hot\\.md',
+    'dendron\\.yml',
+    'config\\.edn',
+    'graph\\.json',
+    'quartz\\.config\\.(ts|js|ya?ml)',
+  ]
+  const genericHubFiles = HUB_FILES.filter((name) => name !== 'hot.md')
+  for (const name of LLMWIKI_TYPED_DIRS) {
+    filePatterns.push(`${escapeRegex(name)}[\\\\/].*\\.(md|org)`)
+  }
+  if (includeGenericMarkdown) {
+    for (const name of genericHubFiles) {
+      filePatterns.push(escapeRegex(name))
+    }
+    filePatterns.push('extensions\\.json')
+    filePatterns.push('.*\\.(md|org)')
+  }
+  return `(?i)(^|[\\\\/])(${[
+    ...filePatterns,
+  ].join('|')})$`
+}
+
+function fdDiscoveryDirectoryPattern({ includeGenericMarkdown = false } = {}) {
+  const directories = [
+    '\\.obsidian',
+    '\\.foam',
+    'logseq',
+  ]
+  if (includeGenericMarkdown) {
+    directories.push(
+      '\\.vscode',
+      'pages',
+      'journals',
+      ...[...SOURCE_LIKE_DIR_NAMES].map(escapeRegex),
+    )
+  }
+  return `(?i)(^|[\\\\/])(${[
+    ...directories,
+  ].join('|')})$`
+}
+
+function ripgrepGlobArgs({ includeGenericMarkdown = false } = {}) {
+  const patterns = new Set()
+  const includeGlobs = includeGenericMarkdown
+    ? [...FAST_DISCOVERY_MARKER_GLOBS, ...FAST_DISCOVERY_GENERIC_GLOBS]
+    : FAST_DISCOVERY_MARKER_GLOBS
+  for (const glob of includeGlobs) {
+    patterns.add(glob)
+    if (!glob.startsWith('**/')) {
+      patterns.add(`**/${glob}`)
+    }
+  }
+  for (const glob of FAST_DISCOVERY_EXCLUDE_GLOBS) {
+    patterns.add(glob)
+    if (glob.startsWith('!') && !glob.startsWith('!**/')) {
+      patterns.add(`!**/${glob.slice(1)}`)
+    }
+  }
+  for (const name of SKIP_DIR_NAMES) {
+    patterns.add(`!**/${name}/**`)
+  }
+  return [...patterns].flatMap((glob) => ['--glob', glob])
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+}
+
+function isPathAtOrBelowRoot(path, root) {
+  const rel = relative(root, path)
+  return !rel || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function directoryDepthFromRoot(path, root) {
+  const rel = relative(root, path)
+  if (!rel) {
+    return 0
+  }
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    return Number.POSITIVE_INFINITY
+  }
+  return rel.split(/[\\/]+/).filter(Boolean).length
+}
+
+function hasSkippedPathSegment(path, root) {
+  const rel = relative(root, path)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    return false
+  }
+  return rel
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .some((part) => {
+      const lower = part.toLowerCase()
+      return isSkippedDirectoryName(lower)
+    })
 }
 
 function addOrUpdateCandidate(map, candidate) {
@@ -709,10 +1290,14 @@ function shouldSkipDir(path, isRoot = false) {
   if (isLlmwikiWorkInternalPath(path)) {
     return true
   }
-  if (SKIP_DIR_NAMES.has(lower)) {
+  if (isSkippedDirectoryName(lower)) {
     return true
   }
-  return lower.endsWith('.egg-info')
+  return false
+}
+
+function isSkippedDirectoryName(lower) {
+  return SKIP_DIR_NAMES.has(lower) || lower.startsWith('.cursor-tutor') || lower.startsWith('_archive') || lower.endsWith('.egg-info')
 }
 
 function isLlmwikiWorkInternalPath(path) {

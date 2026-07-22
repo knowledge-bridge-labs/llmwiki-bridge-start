@@ -32,9 +32,13 @@ is configured, smoke uses delegated-runtime mode; otherwise it uses
 evidence-only mode.
 
 Default discovery scans the user home directory unless `--path`, `--cwd`, or
-`--workspace` is supplied. The scanner skips dependency, cache, build, generated
-smoke, and OS folders, scores likely wiki roots, removes obvious child-folder
-duplicates, and optionally validates candidates with `llmwiki-serve manifest`.
+`--workspace` is supplied. The scanner prefers optional local tools such as
+`fd`/`rg` when available and falls back to Node traversal. It skips dependency,
+cache, build, example, archive, generated smoke, runtime-log, transient
+download/editor, and OS folders, scores likely wiki roots, removes obvious
+child-folder duplicates, and optionally validates candidates with
+`llmwiki-serve manifest`. Pass `--path DIR` to intentionally scan a skipped
+folder such as Downloads or an examples directory.
 The default minimum score is `30`; use `--min-score 10` when intentionally
 looking for plain Markdown folders.
 

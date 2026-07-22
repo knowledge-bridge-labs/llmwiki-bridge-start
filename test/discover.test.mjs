@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
+import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -485,6 +485,58 @@ test('discoverCandidates hides low-confidence generic folders unless minScore is
   const explicitResult = await discoverCandidates({ roots: [root], maxDepth: 1, minScore: 10, validate: false })
   assert.equal(explicitResult.candidates.length, 1)
   assert.equal(explicitResult.candidates[0].path, root)
+})
+
+test('discoverCandidates accepts an injected scanner for deterministic candidate prefiltering', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-injected-scanner-'))
+  const included = join(root, 'included-wiki')
+  const excluded = join(root, 'excluded-wiki')
+  const generated = join(root, 'node_modules', 'generated-wiki')
+  for (const target of [included, excluded, generated]) {
+    mkdirSync(join(target, 'concepts'), { recursive: true })
+    writeFileSync(join(target, 'index.md'), '---\nreview_state: approved\nsource_refs: [SRC]\n---\n# Index\n')
+    writeFileSync(join(target, 'hot.md'), '# Hot\n')
+    writeFileSync(join(target, 'concepts', 'topic.md'), '# Topic\n')
+  }
+
+  const scannerCalls = []
+  const result = await discoverCandidates({
+    roots: [root],
+    maxDepth: 3,
+    validate: false,
+    scanner(args) {
+      scannerCalls.push(args)
+      return [included, generated]
+    },
+  })
+
+  assert.equal(scannerCalls.length, 1)
+  assert.equal(scannerCalls[0].root, root)
+  assert.deepEqual(result.candidates.map((candidate) => candidate.path), [included])
+  assert(!result.candidates.some((candidate) => candidate.path === excluded))
+  assert(!result.candidates.some((candidate) => candidate.path === generated))
+})
+
+test('scanCandidateDirectories JavaScript fallback prefilters source markers and skips generated folders', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-js-scanner-'))
+  const real = join(root, 'knowledge-wiki')
+  const generated = join(root, 'node_modules', 'generated-wiki')
+  for (const target of [real, generated]) {
+    mkdirSync(join(target, 'concepts'), { recursive: true })
+    writeFileSync(join(target, 'index.md'), '---\nreview_state: approved\nsource_refs: [SRC]\n---\n# Index\n')
+    writeFileSync(join(target, 'hot.md'), '# Hot\n')
+    writeFileSync(join(target, 'concepts', 'topic.md'), '# Topic\n')
+  }
+
+  const scanned = scanCandidateDirectories({
+    root,
+    maxDepth: 4,
+    minScore: 30,
+    preferExternalTools: false,
+  })
+
+  assert(scanned.includes(real))
+  assert(!scanned.includes(generated))
 })
 
 test('mergeBridgeSources upserts by source URL without dropping existing sources', () => {
