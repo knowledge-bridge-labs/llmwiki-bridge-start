@@ -8,11 +8,11 @@ folders and Markdown knowledge-tool roots, validates that `llmwiki-serve` can
 read them, starts loopback source servers when requested, registers those
 sources with a local bridge when requested, and runs bridge smoke checks.
 
-## Quick Prototype
+## Quick Start
 
 ```bash
 npx llmwiki-bridge-start@latest
-npx llmwiki-bridge-start@latest quickstart --workspace
+npx llmwiki-bridge-start@latest --workspace
 npx llmwiki-bridge-start@latest discover --home
 npx llmwiki-bridge-start@latest discover --path . --validate
 npx llmwiki-bridge-start@latest start --path .llmwiki-work/knowledge-bridge-labs-wiki --port 11001
@@ -20,11 +20,23 @@ npx llmwiki-bridge-start@latest register --bridge http://127.0.0.1:8788 --config
 npx llmwiki-bridge-start@latest smoke --bridge http://127.0.0.1:8788
 ```
 
+If `llmwiki-serve` is not on `PATH`, point the harness at a local checkout or
+environment explicitly, for example:
+
+```bash
+npx llmwiki-bridge-start@latest --path ./wiki \
+  --serve-command uv --serve-arg run --serve-arg llmwiki-serve --serve-cwd ../llmwiki-serve
+```
+
 Running `npx llmwiki-bridge-start@latest` with no subcommand starts the bounded
-first-run quickstart flow; `quickstart` remains an explicit equivalent. It asks
-whether to discover local source folders, lets you multi-select candidates,
-validates selected folders only when you choose to start them, starts loopback
-source URLs, then explains that those URLs can be used directly without
+first-run quickstart flow; `quickstart` remains an explicit equivalent. By
+default it asks before scanning the current user's home directory. Use `--path
+DIR`, `--workspace`, or `--cwd` to constrain discovery before answering yes.
+The flow shows a checkbox multi-select in interactive terminals, falls back to
+comma-separated numbered selection for piped/non-interactive runs, validates
+selected folders only when you choose to start them, waits for started
+loopback source URLs to answer health checks, then explains that those URLs can
+be used directly without
 `llmwiki-agent-bridge`. Bridge setup is optional: if you opt in, quickstart uses
 an already running bridge or prints a safe start command such as
 `npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
@@ -32,6 +44,10 @@ Quickstart runs that command only after a second explicit approval. Once a
 bridge is running, it merge-registers the started sources and runs an A2A-style
 smoke request. If an explicit LLM endpoint is configured, smoke uses
 delegated-runtime mode; otherwise it uses evidence-only mode.
+
+`--yes` is intended for local smoke automation: it accepts discovery and source
+startup defaults, selects the first candidate, and still skips optional bridge
+setup unless `--setup-bridge` is also supplied.
 
 Default discovery scans the user home directory unless `--path`, `--cwd`, or
 `--workspace` is supplied. The scanner prefers optional local tools such as

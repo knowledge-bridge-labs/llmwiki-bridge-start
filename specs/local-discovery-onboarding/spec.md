@@ -61,8 +61,9 @@ source server.
 
 ## Requirements
 
-- The CLI must work without runtime dependencies beyond Node and
-  `llmwiki-serve`.
+- The CLI must keep scriptable commands lightweight and deterministic. The
+  guided TTY quickstart may use a small prompt library for multi-select UX, but
+  non-TTY, piped, and `--yes` flows must continue to use text/flag fallbacks.
 - `discover` must be safe enough to run from a home directory by default.
 - `discover` output must expose the score, confidence, and marker signals that
   caused each candidate to appear.
@@ -73,10 +74,18 @@ source server.
 - Invoking `llmwiki-bridge-start` without a subcommand must start the
   quickstart flow; explicit `quickstart` remains equivalent and explicit
   `discover` remains available for scriptable candidate listing.
-- `quickstart` must ask before discovery, support multi-select source startup,
-  and allow a successful direct-source-only exit before bridge setup.
+- `quickstart` must ask before discovery and make the default home-directory
+  scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
+- `quickstart` must support TTY checkbox-style multi-select source startup,
+  preserve comma-separated text selection for non-TTY/automation, and allow a
+  successful direct-source-only exit before bridge setup.
+- `start`/`quickstart` must not report a launched source as ready until its
+  loopback HTTP health endpoint responds within a bounded timeout.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user
   explicitly opts in.
+- `quickstart --yes` must remain safe for smoke automation: accept discovery and
+  source-start defaults, select the first candidate, and skip optional bridge
+  setup unless `--setup-bridge` is also supplied.
 - Source URLs with credentials or unsupported schemes must be rejected.
 - Tests must cover scoring, duplicate suppression, generated-folder filtering,
   supported-variant markers, default generic fallback behavior, manifest

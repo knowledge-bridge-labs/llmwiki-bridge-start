@@ -1,10 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
+import { cancel as clackCancel, isCancel as isClackCancel, multiselect as clackMultiselect } from '@clack/prompts'
 
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8788'
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT_START = 11001
@@ -14,11 +17,30 @@ const DEFAULT_MIN_SCORE = 30
 const FAST_DISCOVERY_EXTRA_DEPTH = 4
 const FAST_DISCOVERY_TIMEOUT_MS = 30000
 const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
+const DEFAULT_SOURCE_HEALTH_TIMEOUT_MS = 15000
+const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
 const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
+const QUICKSTART_STEP_TOTAL = 5
+const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
+const ANSI_CODES = {
+  reset: '\u001b[0m',
+  boldCyan: '\u001b[1;36m',
+  cyan: '\u001b[36m',
+  green: '\u001b[32m',
+  yellow: '\u001b[33m',
+  red: '\u001b[31m',
+}
+const STATUS_MARKER_STYLES = {
+  info: ['info', 'cyan'],
+  ok: ['ok', 'green'],
+  run: ['run', 'cyan'],
+  skip: ['skip', 'yellow'],
+  fail: ['fail', 'red'],
+}
 
 const SKIP_DIR_NAMES = new Set([
   '.antigravity',
@@ -256,6 +278,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     ...commands,
   }
   const output = io.stdout || process.stdout
+  const ui = createQuickstartUi(io)
   const prompter = createQuickstartPrompter(io, { yes: boolOption(options.yes ?? options.y) })
   const bridgeUrl = stringOption(options.bridge, DEFAULT_BRIDGE_URL)
   const configPath = stringOption(options.config, defaultConfigPath())
@@ -277,16 +300,19 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
   }
 
   try {
-    output.write('llmwiki-bridge-start quickstart\n')
-    output.write('This flow can start local Knowledge Source endpoints first. The agent bridge is optional.\n')
-    if (!await confirmQuickstart(prompter, '1) Auto-discover local LLMWiki/knowledge source folders?', true)) {
-      output.write('Skipped discovery. You can run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
+    output.write(formatQuickstartBanner(ui))
+    writeStatus(output, ui, 'info', 'Start local Knowledge Source endpoints first; the agent bridge is optional.')
+
+    writeQuickstartStep(output, ui, 1, QUICKSTART_STEP_TOTAL, 'Discover sources')
+    if (!await confirmQuickstart(prompter, 'Auto-discover local LLMWiki/knowledge source folders? Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.', true)) {
+      writeStatus(output, ui, 'skip', 'Skipped discovery.')
+      output.write('Run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
       result.skipped.push('discovery', 'selection', 'start', 'bridge-setup', 'register', 'smoke')
       return result
     }
     result.autoDiscover = true
 
-    output.write('Discovering candidates without validation. Validation runs only if you start selected sources.\n')
+    writeStatus(output, ui, 'run', 'Discovering candidates without validation. Validation runs only if you start selected sources.')
     const discovery = await runtime.discoverCandidates({
       roots,
       maxDepth: intOption(options.depth, DEFAULT_MAX_DEPTH),
@@ -298,42 +324,46 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     result.discovery = discovery
 
     if (!discovery.candidates.length) {
-      output.write('No LLMWiki candidates found. Try --path DIR or --min-score 10 for generic Markdown folders.\n')
+      writeStatus(output, ui, 'skip', 'No LLMWiki candidates found.')
+      output.write('Try --path DIR or --min-score 10 for generic Markdown folders.\n')
       result.skipped.push('selection', 'start', 'bridge-setup', 'register', 'smoke')
       return result
     }
 
-    output.write('\nCandidates:\n')
-    output.write(formatCandidates(discovery.candidates))
+    writeQuickstartStep(output, ui, 2, QUICKSTART_STEP_TOTAL, 'Choose source folders')
+    writeStatus(output, ui, 'ok', `Found ${discovery.candidates.length} candidate source folder(s).`)
+    if (!prompter.usesInteractiveCandidateSelection) {
+      output.write(formatQuickstartCandidates(discovery.candidates))
+    }
 
-    const selectionAnswer = await prompter.ask('Select source folders to start (comma-separated ranks, "all", or "q"; default 1): ', '1')
-    const selected = parseCandidateSelection(selectionAnswer, discovery.candidates)
+    const selected = await prompter.selectCandidates(discovery.candidates)
     result.selected = selected.map(summarizeCandidateForFlow)
     if (!selected.length) {
-      output.write('Quickstart cancelled before starting sources.\n')
+      writeStatus(output, ui, 'skip', 'Quickstart cancelled before starting sources.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
 
-    if (!await confirmQuickstart(prompter, `2) Start ${selected.length} selected source server(s) on loopback? This validates each selected folder first.`, true)) {
-      output.write('Skipped source startup. No source servers were started.\n')
+    writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
+    if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback? This validates each selected folder first.`, true)) {
+      writeStatus(output, ui, 'skip', 'Skipped source startup. No source servers were started.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
 
-    output.write(`\nValidating ${selected.length} selected candidate(s) with llmwiki-serve manifest.\n`)
+    writeStatus(output, ui, 'run', `Validating ${selected.length} selected candidate(s) with llmwiki-serve manifest.`)
     const validated = await Promise.all(selected.map((candidate) => runtime.validateCandidate(candidate, serveInvocation)))
     result.validated = validated.map(summarizeCandidateForFlow)
     for (const candidate of validated) {
       const name = candidate.manifest?.title || basename(candidate.path)
-      output.write(`- ${candidate.startable ? 'OK' : 'FAIL'} ${name} (${candidate.path})\n`)
+      writeStatus(output, ui, candidate.startable ? 'ok' : 'fail', `${name} (${candidate.path})`)
       if (!candidate.startable && candidate.validationError) {
         output.write(`  ${candidate.validationError}\n`)
       }
     }
     const startable = validated.filter((candidate) => candidate.startable)
     if (!startable.length) {
-      output.write('No selected candidates validated successfully; stopping before source startup or bridge setup.\n')
+      writeStatus(output, ui, 'fail', 'No selected candidates validated successfully; stopping before source startup or bridge setup.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
@@ -347,12 +377,14 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
     })
     result.sourceUrls = sourceUrlsFromStartedSources(result.started.sources)
-    output.write(`Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}\n`)
+    writeStatus(output, ui, 'ok', `Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}`)
     output.write(formatStartedSourceUrls(result.started.sources))
-    output.write('You can use these source URLs directly from local tools. llmwiki-agent-bridge is optional; add it when you want source fan-out, A2A/MCP endpoints, runtime synthesis, or one normalized bridge artifact.\n')
+    writeStatus(output, ui, 'info', 'You can use these source URLs directly from local tools.')
+    output.write('Add llmwiki-agent-bridge when you want source fan-out, A2A/MCP endpoints, runtime synthesis, or one normalized bridge artifact.\n')
 
-    if (!await confirmQuickstart(prompter, `3) Install/setup optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the local source URLs above are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
-      output.write('Skipped bridge setup. Quickstart complete with direct local source URL(s).\n')
+    writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Optional bridge setup')
+    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the local source URLs above are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
+      writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source URL(s).')
       output.write(formatStartedSourceUrls(result.started.sources))
       result.skipped.push('bridge-setup', 'register', 'smoke')
       return result
@@ -362,45 +394,47 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       runtime,
       prompter,
       output,
+      ui,
       options,
       bridgeUrl,
       logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
     })
 
     if (result.bridgeSetup.continueToBridge === false) {
-      output.write('Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.\n')
+      writeStatus(output, ui, 'skip', 'Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.')
       result.skipped.push('register', 'smoke')
       return result
     }
 
     const registerMode = boolOption(options.replace) ? 'replace' : 'merge'
-    output.write(`\nRegistering started source(s) with ${bridgeUrl} (${registerMode} mode).\n`)
+    writeQuickstartStep(output, ui, 5, QUICKSTART_STEP_TOTAL, 'Register and smoke test')
+    writeStatus(output, ui, 'run', `Registering started source(s) with ${bridgeUrl} (${registerMode} mode).`)
     result.registered = await runtime.registerSources({
       bridgeUrl,
       configPath,
       replace: boolOption(options.replace),
     })
-    output.write(`Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.\n`)
+    writeStatus(output, ui, 'ok', `Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.`)
 
     const smokePlan = await runtime.selectBridgeSmokeMode({ options, bridgeUrl, env: process.env })
     result.smokeMode = smokePlan.mode
-    output.write(`Running bridge smoke in ${formatBridgeModeLabel(smokePlan.mode)} mode (${smokePlan.reason}).\n`)
+    writeStatus(output, ui, 'run', `Running bridge smoke in ${formatBridgeModeLabel(smokePlan.mode)} mode (${smokePlan.reason}).`)
     result.smoked = await runtime.smokeBridge({
       bridgeUrl,
       query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
       mode: smokePlan.mode,
     })
-    output.write(`Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}\n`)
+    writeStatus(output, ui, 'ok', `Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}`)
     return result
   } finally {
     prompter.close()
   }
 }
 
-async function guideBridgeSetup({ runtime, prompter, output, options, bridgeUrl, logDir }) {
+async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridgeUrl, logDir }) {
   const existingHealth = await runtime.checkBridgeHealth(bridgeUrl)
   if (existingHealth.ok) {
-    output.write(`llmwiki-agent-bridge is already reachable at ${bridgeUrl}.\n`)
+    writeStatus(output, ui, 'ok', `llmwiki-agent-bridge is already reachable at ${bridgeUrl}.`)
     return {
       bridgeUrl,
       executed: false,
@@ -419,36 +453,69 @@ async function guideBridgeSetup({ runtime, prompter, output, options, bridgeUrl,
     continueToBridge: true,
   }
 
-  output.write('\nllmwiki-agent-bridge setup\n')
-  output.write('The bridge is optional. Use it when you want one A2A/MCP-style endpoint for source fan-out and runtime-backed answers.\n')
+  writeStatus(output, ui, 'info', 'The bridge is optional. Use it when you want one A2A/MCP-style endpoint for source fan-out and runtime-backed answers.')
   output.write('Safe start command (no global install; npx uses the package cache, or a local checkout is used when available):\n')
   output.write(`  ${commandText}\n`)
 
   if (detectLlmRuntime(options).configured) {
-    output.write('An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.\n')
+    writeStatus(output, ui, 'info', 'An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.')
   } else {
-    output.write('No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.\n')
+    writeStatus(output, ui, 'info', 'No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.')
   }
 
   if (await confirmQuickstart(prompter, 'Run this bridge command now as a detached local process?', false)) {
     const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: detectLlmRuntime(options) })
     Object.assign(result, { executed: true }, started)
-    output.write(`Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}\n`)
+    writeStatus(output, ui, 'run', `Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}`)
     try {
       const health = await runtime.waitForBridgeHealth(bridgeUrl, { timeoutMs: 10000 })
       result.health = health
-      output.write(`llmwiki-agent-bridge is reachable at ${bridgeUrl}.\n`)
+      writeStatus(output, ui, 'ok', `llmwiki-agent-bridge is reachable at ${bridgeUrl}.`)
     } catch (error) {
       result.health = { ok: false, error: error.message, url: bridgeUrl }
-      output.write(`Bridge did not become reachable at ${bridgeUrl}: ${error.message}\n`)
+      writeStatus(output, ui, 'fail', `Bridge did not become reachable at ${bridgeUrl}: ${error.message}`)
       result.continueToBridge = await confirmQuickstart(prompter, 'Continue with registration/smoke anyway?', false)
     }
     return result
   }
 
-  output.write(`If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.\n`)
+  writeStatus(output, ui, 'info', `If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.`)
   result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?`, false)
   return result
+}
+
+function createQuickstartUi(io = {}) {
+  const output = io.stdout || process.stdout
+  return {
+    color: Boolean(output.isTTY) && !process.env.NO_COLOR,
+  }
+}
+
+function formatQuickstartBanner(ui) {
+  const title = 'llmwiki-bridge-start quickstart'
+  const padded = ` ${title} `
+  const border = `+${'-'.repeat(padded.length)}+`
+  return `${paint(ui, 'boldCyan', `${border}\n|${padded}|\n${border}`)}\n`
+}
+
+function writeQuickstartStep(output, ui, index, total, title) {
+  output.write(`\n${paint(ui, 'boldCyan', `[${index}/${total}] ${title}`)}\n`)
+}
+
+function writeStatus(output, ui, kind, message) {
+  output.write(`${formatStatusMarker(ui, kind)} ${message}\n`)
+}
+
+function formatStatusMarker(ui, kind) {
+  const [label, style] = STATUS_MARKER_STYLES[kind] || [kind, 'cyan']
+  return paint(ui, style, `[${label}]`)
+}
+
+function paint(ui, style, value) {
+  if (!ui?.color) {
+    return value
+  }
+  return `${ANSI_CODES[style] || ''}${value}${ANSI_CODES.reset}`
 }
 
 export function formatCommand(plan) {
@@ -458,9 +525,13 @@ export function formatCommand(plan) {
 }
 
 function formatBridgeModeLabel(mode) {
-  return mode === 'delegated-runtime'
-    ? 'A2A delegated-runtime'
-    : 'A2A evidence-only'
+  if (mode === BRIDGE_MODE_DELEGATED_RUNTIME) {
+    return 'A2A delegated-runtime'
+  }
+  if (mode === 'hybrid') {
+    return 'hybrid'
+  }
+  return 'A2A evidence-only'
 }
 
 function sourceUrlsFromStartedSources(sources = []) {
@@ -471,22 +542,92 @@ function formatStartedSourceUrls(sources = []) {
   if (!sources.length) {
     return 'No started source URLs were reported.\n'
   }
-  return `Started local Knowledge Source URLs:\n${sources.map((source) => `- ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
+  return `Local Knowledge Source URLs:\n${sources.map((source) => `  - ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
+}
+
+function formatQuickstartCandidates(candidates) {
+  if (!candidates.length) {
+    return 'No LLMWiki candidates found.\n'
+  }
+  const rows = candidates.map((candidate, index) => {
+    const rank = candidate.rank || index + 1
+    const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const pageText = candidate.manifest
+      ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
+      : `${candidate.markdownCount} md`
+    const displayPath = compactText(shortDisplayPath(candidate.path), 96)
+    return `  ${rank}) ${title} (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
+  })
+  return `${rows.join('\n')}\n  all) start all listed candidates\n  q) cancel\n`
+}
+
+function compactText(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+function shortDisplayPath(value) {
+  const path = String(value || '')
+  if (!path || !isAbsolute(path)) {
+    return path
+  }
+  const fromCwd = relative(process.cwd(), path)
+  if (fromCwd && !fromCwd.startsWith('..') && !isAbsolute(fromCwd)) {
+    return `.${sep}${fromCwd}`
+  }
+  return path
 }
 
 function createQuickstartPrompter(io, { yes = false } = {}) {
-  if (typeof io.prompt === 'function') {
+  const input = io.stdin || process.stdin
+  const output = io.stdout || process.stdout
+  const promptOnOneLine = Boolean(input.isTTY && output.isTTY)
+  const usesInteractiveCandidateSelection = shouldUseInteractiveCandidateSelection(io, { yes })
+  const clackPrompts = {
+    multiselect: io.clackPrompts?.multiselect || clackMultiselect,
+    isCancel: io.clackPrompts?.isCancel || isClackCancel,
+    cancel: io.clackPrompts?.cancel || clackCancel,
+  }
+
+  if (yes) {
     return {
+      usesInteractiveCandidateSelection: false,
+      output,
+      repromptYesNo: false,
       async ask(question, fallback = '') {
-        const answer = await io.prompt(question, fallback)
-        const trimmed = String(answer ?? '').trim()
-        return trimmed || fallback
+        output.write(formatQuickstartPrompt(question, { oneLine: promptOnOneLine }))
+        output.write(`${fallback}\n`)
+        return fallback
+      },
+      async selectCandidates(candidates) {
+        return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: false })
       },
       close() {},
     }
   }
-  const input = io.stdin || process.stdin
-  const output = io.stdout || process.stdout
+
+  if (typeof io.prompt === 'function') {
+    return {
+      usesInteractiveCandidateSelection,
+      output,
+      repromptYesNo: true,
+      async ask(question, fallback = '') {
+        const answer = await io.prompt(formatQuickstartPrompt(question, { oneLine: true }), fallback)
+        const trimmed = String(answer ?? '').trim()
+        return trimmed || fallback
+      },
+      async selectCandidates(candidates) {
+        if (usesInteractiveCandidateSelection) {
+          return selectCandidatesWithClack(candidates, { clackPrompts, input, output })
+        }
+        return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: true })
+      },
+      close() {},
+    }
+  }
   let readline = null
   const queued = []
   const waiters = []
@@ -526,16 +667,32 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
     })
   }
 
+  function closeReadlineBeforeClack() {
+    if (!readline) {
+      return
+    }
+    readline.close()
+    readline = null
+    closed = false
+    queued.length = 0
+  }
+
   return {
+    usesInteractiveCandidateSelection,
+    output,
+    repromptYesNo: Boolean(input.isTTY && output.isTTY),
     async ask(question, fallback = '') {
-      if (yes) {
-        output.write(`${question}${fallback}\n`)
-        return fallback
-      }
-      output.write(question)
+      output.write(formatQuickstartPrompt(question, { oneLine: promptOnOneLine }))
       const answer = await readLine()
       const trimmed = String(answer ?? '').trim()
       return trimmed || fallback
+    },
+    async selectCandidates(candidates) {
+      if (usesInteractiveCandidateSelection) {
+        closeReadlineBeforeClack()
+        return selectCandidatesWithClack(candidates, { clackPrompts, input, output })
+      }
+      return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: Boolean(input.isTTY && output.isTTY) })
     },
     close() {
       readline?.close()
@@ -543,9 +700,95 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   }
 }
 
+function shouldUseInteractiveCandidateSelection(io = {}, { yes = false } = {}) {
+  const input = io.stdin || process.stdin
+  const output = io.stdout || process.stdout
+  return Boolean(!yes && (io.forceInteractiveCandidateSelection || (typeof io.prompt !== 'function' && input.isTTY && output.isTTY)))
+}
+
+async function selectCandidatesWithText(ask, candidates, { output, reprompt = false, maxAttempts = 5 } = {}) {
+  let attempts = 0
+  while (true) {
+    const selectionAnswer = await ask(`[?] ${QUICKSTART_SELECTION_PROMPT}`, '1')
+    try {
+      return parseCandidateSelection(selectionAnswer, candidates)
+    } catch (error) {
+      attempts += 1
+      if (!reprompt || attempts >= maxAttempts) {
+        throw error
+      }
+      output?.write(`[fail] ${error.message}. Enter candidate ranks, "all", or "q".\n`)
+    }
+  }
+}
+
+async function selectCandidatesWithClack(candidates, { clackPrompts, input, output }) {
+  const initialValues = initialCandidateSelectionValues(candidates)
+  const answer = await clackPrompts.multiselect({
+    message: 'Select source folders to start',
+    options: formatCandidateMultiselectOptions(candidates),
+    initialValues,
+    cursorAt: initialValues[0],
+    required: false,
+    input,
+    output,
+  })
+  if (clackPrompts.isCancel(answer)) {
+    clackPrompts.cancel('No source folders selected.', { output })
+    return []
+  }
+  if (!Array.isArray(answer) || !answer.length) {
+    return []
+  }
+  return parseCandidateSelection(answer.join(','), candidates, { fallback: 'none' })
+}
+
+function formatCandidateMultiselectOptions(candidates) {
+  return candidates.map((candidate, index) => {
+    const rank = candidateRank(candidate, index)
+    const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const pageText = candidate.manifest
+      ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
+      : `${candidate.markdownCount} md`
+    return {
+      value: rank,
+      label: `${rank}) ${title}`,
+      hint: compactText(`${candidate.confidence}/${candidate.score}, ${pageText} — ${shortDisplayPath(candidate.path)}`, 96),
+    }
+  })
+}
+
+function initialCandidateSelectionValues(candidates) {
+  const rankedFirst = candidates.find((candidate, index) => candidateRank(candidate, index) === 1)
+  if (!rankedFirst && !candidates.length) {
+    return []
+  }
+  return [candidateRank(rankedFirst || candidates[0], candidates.indexOf(rankedFirst || candidates[0]))]
+}
+
+function candidateRank(candidate, index) {
+  return Number(candidate?.rank || index + 1)
+}
+
 async function confirmQuickstart(prompter, question, fallback) {
-  const answer = await prompter.ask(`${question} ${fallback ? '[Y/n]' : '[y/N]'} `, fallback ? 'y' : 'n')
-  return parseYesNo(answer, fallback)
+  let attempts = 0
+  while (true) {
+    const answer = await prompter.ask(`[?] ${question} ${fallback ? '[Y/n]' : '[y/N]'}`, fallback ? 'y' : 'n')
+    try {
+      return parseYesNo(answer, fallback)
+    } catch (error) {
+      attempts += 1
+      if (!prompter.repromptYesNo || attempts >= 5) {
+        throw error
+      }
+      prompter.output?.write(`[fail] ${error.message}. Enter "y" or "n".\n`)
+    }
+  }
+}
+
+function formatQuickstartPrompt(question, { oneLine }) {
+  const text = String(question || '').trim().replace(/:+$/, '')
+  return oneLine ? `${text}: ` : `${text}:\n`
 }
 
 export function parseYesNo(value, fallback = false) {
@@ -1568,52 +1811,300 @@ export async function doctor({ bridgeUrl = DEFAULT_BRIDGE_URL, serveInvocation =
   return { checks }
 }
 
-export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEFAULT_PORT_START, ports = [], serveInvocation = resolveServeInvocation({}), configPath = defaultConfigPath(), logDir = defaultLogDir() } = {}) {
+export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEFAULT_PORT_START, ports = [], serveInvocation = resolveServeInvocation({}), configPath = defaultConfigPath(), logDir = defaultLogDir(), healthTimeoutMs = DEFAULT_SOURCE_HEALTH_TIMEOUT_MS, healthIntervalMs = DEFAULT_SOURCE_HEALTH_INTERVAL_MS } = {}) {
   if (!paths?.length) {
     throw new Error('start requires at least one --path')
   }
   mkdirSync(logDir, { recursive: true })
   const sources = []
-  for (let index = 0; index < paths.length; index += 1) {
-    const path = resolve(paths[index])
-    if (!safeIsDirectory(path)) {
-      throw new Error(`Source path is not a directory: ${path}`)
+  const startedProcesses = []
+  try {
+    for (let index = 0; index < paths.length; index += 1) {
+      const path = resolve(paths[index])
+      if (!safeIsDirectory(path)) {
+        throw new Error(`Source path is not a directory: ${path}`)
+      }
+      const port = ports[index] || nextAvailablePort(portStart + index)
+      const manifest = await llmwikiServeJson(serveInvocation, ['manifest', path], { timeoutMs: 30000 })
+      const sourceId = manifest.source_id || slug(manifest.title || basename(path))
+      const out = join(logDir, `${sourceId}-${port}.out.log`)
+      const err = join(logDir, `${sourceId}-${port}.err.log`)
+      const outFd = openSync(out, 'a')
+      const errFd = openSync(err, 'a')
+      let child
+      try {
+        child = spawn(
+          serveInvocation.command,
+          [...serveInvocation.baseArgs, 'serve', path, '--host', host, '--port', String(port)],
+          {
+            cwd: serveInvocation.cwd,
+            detached: true,
+            stdio: ['ignore', outFd, errFd],
+            windowsHide: true,
+          },
+        )
+      } finally {
+        closeFileDescriptor(outFd)
+        closeFileDescriptor(errFd)
+      }
+      child.unref()
+      const startedProcess = { child, serverProcessId: null }
+      startedProcesses.push(startedProcess)
+      const serveUrl = `http://${host}:${port}`
+      const logs = { stdout: out, stderr: err }
+      const health = await waitForSourceHealth(serveUrl, {
+        child,
+        logs,
+        timeoutMs: healthTimeoutMs,
+        intervalMs: healthIntervalMs,
+      })
+      const serverProcessId = detectListeningProcessId(host, port)
+      startedProcess.serverProcessId = serverProcessId
+      const processId = serverProcessId || child.pid
+      sources.push({
+        id: sourceId,
+        name: manifest.title || sourceId,
+        title: manifest.title || sourceId,
+        protocol: 'llmwiki-http',
+        status: 'ready',
+        selected: index === 0,
+        url: serveUrl,
+        path,
+        processId,
+        runnerProcessId: serverProcessId && serverProcessId !== child.pid ? child.pid : undefined,
+        manifest: summarizeManifest(manifest),
+        health,
+        logs,
+      })
     }
-    const port = ports[index] || nextAvailablePort(portStart + index)
-    const manifest = await llmwikiServeJson(serveInvocation, ['manifest', path], { timeoutMs: 30000 })
-    const sourceId = manifest.source_id || slug(manifest.title || basename(path))
-    const out = join(logDir, `${sourceId}-${port}.out.log`)
-    const err = join(logDir, `${sourceId}-${port}.err.log`)
-    const outFd = openSync(out, 'a')
-    const errFd = openSync(err, 'a')
-    const child = spawn(
-      serveInvocation.command,
-      [...serveInvocation.baseArgs, 'serve', path, '--host', host, '--port', String(port)],
-      {
-        cwd: serveInvocation.cwd,
-        detached: true,
-        stdio: ['ignore', outFd, errFd],
-        windowsHide: true,
-      },
-    )
-    child.unref()
-    const serveUrl = `http://${host}:${port}`
-    sources.push({
-      id: sourceId,
-      name: manifest.title || sourceId,
-      title: manifest.title || sourceId,
-      protocol: 'llmwiki-http',
-      status: 'ready',
-      selected: index === 0,
-      url: serveUrl,
-      path,
-      processId: child.pid,
-      manifest: summarizeManifest(manifest),
-      logs: { stdout: out, stderr: err },
-    })
+  } catch (error) {
+    cleanupStartedProcesses(startedProcesses)
+    throw error
   }
   writeSourceConfig(configPath, sources)
   return { configPath, sources }
+}
+
+async function waitForSourceHealth(sourceUrl, { child, logs, timeoutMs = DEFAULT_SOURCE_HEALTH_TIMEOUT_MS, intervalMs = DEFAULT_SOURCE_HEALTH_INTERVAL_MS } = {}) {
+  const deadline = Date.now() + timeoutMs
+  const childFailure = observeChildFailure(child)
+  let lastError = null
+  while (Date.now() <= deadline) {
+    const failure = childFailure()
+    if (failure) {
+      throw new Error(formatSourceHealthFailure(sourceUrl, failure.message, logs))
+    }
+    try {
+      const remainingMs = Math.max(1, deadline - Date.now())
+      const health = await fetchJson(new URL('/health', sourceUrl), { timeoutMs: Math.min(1000, remainingMs) })
+      return { ok: true, status: health.status || 'reachable', url: sourceUrl }
+    } catch (error) {
+      lastError = error
+    }
+    const failureAfterFetch = childFailure()
+    if (failureAfterFetch) {
+      throw new Error(formatSourceHealthFailure(sourceUrl, failureAfterFetch.message, logs))
+    }
+    const sleepMs = Math.min(intervalMs, Math.max(0, deadline - Date.now()))
+    if (sleepMs <= 0) {
+      break
+    }
+    await delay(sleepMs)
+  }
+  const detail = lastError?.message ? ` Last error: ${lastError.message}` : ''
+  throw new Error(formatSourceHealthFailure(sourceUrl, `Timed out waiting for /health after ${timeoutMs}ms.${detail}`, logs))
+}
+
+function observeChildFailure(child) {
+  let failure = null
+  child.once('error', (error) => {
+    failure = error
+  })
+  child.once('exit', (code, signal) => {
+    if (!failure) {
+      failure = new Error(`llmwiki-serve exited before becoming healthy (code ${code ?? 'n/a'}, signal ${signal ?? 'n/a'})`)
+    }
+  })
+  return () => failure
+}
+
+function formatSourceHealthFailure(sourceUrl, detail, logs = {}) {
+  const logText = logs.stdout || logs.stderr
+    ? ` Logs: ${logs.stdout || 'stdout n/a'}, ${logs.stderr || 'stderr n/a'}`
+    : ''
+  return `Source server did not become healthy at ${sourceUrl}. ${detail}${logText}`
+}
+
+function detectListeningProcessId(host, port) {
+  const numericPort = Number(port)
+  if (!Number.isInteger(numericPort)) {
+    return null
+  }
+  if (process.platform === 'win32') {
+    return detectWindowsListeningProcessId(host, numericPort)
+  }
+  return detectUnixListeningProcessId(numericPort)
+}
+
+function detectWindowsListeningProcessId(host, port) {
+  const child = spawnSync('netstat', ['-ano', '-p', 'TCP'], {
+    encoding: 'utf8',
+    timeout: 3000,
+    windowsHide: true,
+  })
+  if (child.error || (!child.stdout && child.status !== 0)) {
+    return null
+  }
+  for (const line of String(child.stdout || '').split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/)
+    if (parts.length < 5) {
+      continue
+    }
+    const [protocol, localAddress, , state, pidText] = parts
+    if (!/^tcp$/i.test(protocol) || state.toUpperCase() !== 'LISTENING') {
+      continue
+    }
+    const pid = Number.parseInt(pidText, 10)
+    if (Number.isInteger(pid) && endpointMatchesHostPort(localAddress, host, port)) {
+      return pid
+    }
+  }
+  return null
+}
+
+function detectUnixListeningProcessId(port) {
+  const lsof = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    encoding: 'utf8',
+    timeout: 3000,
+  })
+  const lsofPid = firstIntegerLine(lsof.stdout)
+  if (lsofPid) {
+    return lsofPid
+  }
+
+  const ss = spawnSync('ss', ['-ltnp'], {
+    encoding: 'utf8',
+    timeout: 3000,
+  })
+  const ssPid = firstListeningPidFromProcessTable(ss.stdout, port)
+  if (ssPid) {
+    return ssPid
+  }
+
+  const netstat = spawnSync('netstat', ['-ltnp'], {
+    encoding: 'utf8',
+    timeout: 3000,
+  })
+  return firstListeningPidFromProcessTable(netstat.stdout, port)
+}
+
+function firstIntegerLine(value) {
+  for (const line of String(value || '').split(/\r?\n/)) {
+    const pid = Number.parseInt(line.trim(), 10)
+    if (Number.isInteger(pid) && pid > 0) {
+      return pid
+    }
+  }
+  return null
+}
+
+function firstListeningPidFromProcessTable(value, port) {
+  const portPattern = new RegExp(`[:.]${port}\\b`)
+  for (const line of String(value || '').split(/\r?\n/)) {
+    if (!portPattern.test(line)) {
+      continue
+    }
+    const match = line.match(/pid=(\d+)/) || line.match(/\s(\d+)\/\S+\s*$/)
+    if (match) {
+      const pid = Number.parseInt(match[1], 10)
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid
+      }
+    }
+  }
+  return null
+}
+
+function endpointMatchesHostPort(endpoint, host, port) {
+  const parsed = parseEndpoint(endpoint)
+  if (!parsed || parsed.port !== port) {
+    return false
+  }
+  const expectedHost = normalizeEndpointHost(host)
+  if (!expectedHost || expectedHost === '0.0.0.0' || expectedHost === '::') {
+    return true
+  }
+  const actualHost = normalizeEndpointHost(parsed.host)
+  if (actualHost === expectedHost) {
+    return true
+  }
+  if (expectedHost === 'localhost') {
+    return actualHost === '127.0.0.1' || actualHost === '::1'
+  }
+  return false
+}
+
+function parseEndpoint(endpoint) {
+  const text = String(endpoint || '').trim()
+  const bracketed = text.match(/^\[?([^\]]+)\]?:(\d+)$/)
+  if (!bracketed) {
+    return null
+  }
+  return {
+    host: bracketed[1],
+    port: Number.parseInt(bracketed[2], 10),
+  }
+}
+
+function normalizeEndpointHost(host) {
+  return String(host || '').trim().replace(/^\[(.*)]$/, '$1').toLowerCase()
+}
+
+function cleanupStartedProcesses(startedProcesses) {
+  for (const startedProcess of startedProcesses) {
+    stopStartedProcess(startedProcess?.child || startedProcess)
+    if (startedProcess?.serverProcessId && startedProcess.serverProcessId !== startedProcess.child?.pid) {
+      stopProcessId(startedProcess.serverProcessId)
+    }
+  }
+}
+
+function stopStartedProcess(child) {
+  if (!child?.pid || child.exitCode !== null || child.signalCode) {
+    return
+  }
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-child.pid, 'SIGTERM')
+      return
+    }
+  } catch {
+    // Fall through to killing the child process itself.
+  }
+  try {
+    child.kill('SIGTERM')
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function stopProcessId(pid) {
+  if (!pid || pid === process.pid) {
+    return
+  }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function closeFileDescriptor(fd) {
+  try {
+    closeSync(fd)
+  } catch {
+    // Nothing useful to do if the fd was already closed.
+  }
 }
 
 function nextAvailablePort(start) {
@@ -1949,13 +2440,15 @@ export function resolveServeInvocation(options = {}) {
       cwd: process.env.LLMWIKI_SERVE_CWD || process.cwd(),
     }
   }
-  const siblingServe = resolve(process.cwd(), '..', 'llmwiki-serve')
-  const currentServe = resolve(process.cwd(), 'llmwiki-serve')
-  if (safeIsFile(join(siblingServe, 'pyproject.toml'))) {
-    return { command: 'uv', baseArgs: ['run', 'llmwiki-serve'], cwd: siblingServe }
-  }
-  if (safeIsFile(join(currentServe, 'pyproject.toml'))) {
-    return { command: 'uv', baseArgs: ['run', 'llmwiki-serve'], cwd: currentServe }
+  const candidates = [
+    resolve(process.cwd(), '..', 'llmwiki-serve'),
+    resolve(process.cwd(), 'llmwiki-serve'),
+    resolve(PACKAGE_ROOT, '..', 'llmwiki-serve'),
+  ]
+  for (const candidate of candidates) {
+    if (safeIsFile(join(candidate, 'pyproject.toml'))) {
+      return { command: 'uv', baseArgs: ['run', 'llmwiki-serve'], cwd: candidate }
+    }
   }
   return { command: 'llmwiki-serve', baseArgs: [], cwd: process.cwd() }
 }
@@ -1972,7 +2465,7 @@ async function llmwikiServeJson(invocation, args, { timeoutMs }) {
     windowsHide: true,
   })
   if (child.error) {
-    throw child.error
+    throw new Error(formatServeInvocationError(invocation, child.error))
   }
   if (child.status !== 0) {
     throw new Error((child.stderr || child.stdout || `llmwiki-serve exited ${child.status}`).trim())
@@ -1982,6 +2475,19 @@ async function llmwikiServeJson(invocation, args, { timeoutMs }) {
   } catch (error) {
     throw new Error(`Failed to parse llmwiki-serve JSON: ${error.message}`)
   }
+}
+
+function formatServeInvocationError(invocation, error) {
+  const commandText = `${invocation.command} ${invocation.baseArgs.join(' ')}`.trim()
+  if (error?.code === 'ENOENT') {
+    return [
+      `Could not run llmwiki-serve command: ${commandText}`,
+      `cwd: ${invocation.cwd}`,
+      'Install llmwiki-serve, run from a checkout with sibling llmwiki-serve, or pass --serve-command/--serve-cwd.',
+      'For local source-only testing from this workspace, use: --serve-command uv --serve-arg run --serve-arg llmwiki-serve --serve-cwd <llmwiki-serve repo>',
+    ].join('\n')
+  }
+  return `Could not run llmwiki-serve command: ${commandText}\n${error?.message || String(error)}`
 }
 
 async function fetchJson(url, { timeoutMs = 10000, ...init } = {}) {
@@ -2033,10 +2539,10 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--yes]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--yes]
-  llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--json]
-  llmwiki-bridge-start start --path DIR [--port 11001]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
+  llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
   llmwiki-bridge-start smoke [--bridge URL] [--query TEXT] [--mode evidence-only|delegated-runtime|hybrid]
   llmwiki-bridge-start doctor [--bridge URL]
@@ -2054,6 +2560,7 @@ Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
 Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
 Bridge smoke defaults to evidence-only unless --mode or quickstart runtime detection selects another mode.
+Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
 `
 }
 

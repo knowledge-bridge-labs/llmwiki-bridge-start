@@ -26,11 +26,22 @@
 - `discover --validate` manifest success and failure reporting using a
   controlled `llmwiki-serve manifest` invocation.
 - `start` refusal to launch a source when manifest validation fails.
+- `start` readiness behavior: successful launches wait for `/health`, while
+  failed readiness cleans up the spawned process and reports an actionable
+  failure.
 - CLI dispatch paths: `llmwiki-bridge-start` starts quickstart by default,
   explicit `quickstart` remains equivalent, and explicit `discover` remains the
   scriptable listing command.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
+- Quickstart TTY source selection routes through the checkbox multi-select
+  adapter, preselects the first candidate, and maps selected ranks to candidate
+  paths.
+- Quickstart non-TTY source selection prints the concise numbered fallback list
+  and keeps prompts on separate lines for piped input; interactive text fallback
+  reprompts on invalid source selections rather than failing on the first typo.
+- Quickstart interactive yes/no prompts reprompt on invalid answers, while
+  non-interactive automation avoids unbounded waiting.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
 - LLM endpoint detection for delegated-runtime bridge smoke; evidence-only when

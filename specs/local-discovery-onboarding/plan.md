@@ -1,7 +1,7 @@
 # Implementation Plan
 
-1. Scaffold a small ESM npm package with a thin bin wrapper and dependency-free
-   implementation.
+1. Scaffold a small ESM npm package with a thin bin wrapper and minimal runtime
+   dependencies.
 2. Implement discovery scoring for native LLMWiki/OpenWiki roots and common
    Markdown app markers.
 3. Add a fast candidate-directory prefilter before scoring, preferring local
@@ -11,12 +11,16 @@
    runtime logs, smoke, variant, transient download/editor, and generated
    workspace internals.
 5. Validate candidates by invoking `llmwiki-serve manifest`.
-6. Start selected sources through `llmwiki-serve serve` and write a local source
-   config.
+6. Start selected sources through `llmwiki-serve serve`, wait for bounded
+   loopback health readiness, and write a local source config only for ready
+   sources.
 7. Register sources through the bridge settings endpoint with merge/upsert
    semantics.
 8. Add a guided quickstart flow that can stop after direct source startup or
    continue into optional bridge setup.
+   - Use a TTY-only checkbox multi-select for candidate source selection.
+   - Keep the comma-separated numbered fallback for non-TTY, piped, injected
+     prompt, and `--yes` runs.
 9. Add a bridge smoke command that uses evidence-only mode by default and
    delegated-runtime when an explicit LLM endpoint is configured.
 10. Verify with unit tests, package dry-run, targeted local discovery, and a
@@ -37,6 +41,11 @@
   default discovery at medium confidence and require explicit `--min-score 10`
   for intentional low-confidence fallback searches.
 - Existing bridge registry settings must not be overwritten accidentally.
+- Rich prompt libraries can break automation if used unconditionally; gate
+  interactive prompts on TTY and keep fallback output snapshot-tested.
+- Spawned source processes can fail after launch because of port conflicts,
+  missing runtime dependencies, or adapter errors; verify `/health` before
+  presenting a URL as ready and clean up failed child processes.
 
 ## Documentation Plan
 
@@ -48,6 +57,8 @@
 - Validation docs must say that `discover --validate` and `start` call
   `llmwiki-serve manifest` and that manifest success, not marker detection
   alone, determines whether the candidate is startable.
+- Startup docs must say that a source is considered ready only after its HTTP
+  health endpoint responds.
 - Non-goals must remain explicit that the harness does not compile knowledge,
   convert app-specific syntax, crawl or sync remote sources, or replace bridge
   orchestration.

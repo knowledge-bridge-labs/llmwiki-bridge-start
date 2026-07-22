@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Writable } from 'node:stream'
+import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge } from '../src/index.mjs'
+import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -28,9 +28,12 @@ test('runCli starts quickstart when no subcommand is provided', async () => {
   })
 
   assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
+  assert(stdout.text.includes('[1/5] Discover sources'))
+  assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Auto-discover/)
+  assert.match(prompts[0].question, /current user's home/)
 })
 
 test('runCli keeps explicit quickstart available', async () => {
@@ -46,9 +49,37 @@ test('runCli keeps explicit quickstart available', async () => {
   })
 
   assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
+  assert(stdout.text.includes('[1/5] Discover sources'))
+  assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Auto-discover/)
+  assert.match(prompts[0].question, /current user's home/)
+})
+
+test('quickstart reprompts invalid yes/no answers in interactive prompt fallback', async () => {
+  const stdout = captureWritable()
+  const answers = ['maybe', 'n']
+
+  await quickstart(
+    {},
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+    },
+  )
+
+  assert.match(stdout.text, /Expected yes or no/)
+  assert.match(stdout.text, /Enter "y" or "n"/)
+  assert.match(stdout.text, /\[skip\] Skipped discovery/)
 })
 
 test('runCli keeps explicit discover as the scriptable listing command', async () => {
@@ -71,6 +102,52 @@ test('runCli keeps explicit discover as the scriptable listing command', async (
   assert.equal(result.roots[0], root)
   assert(result.candidates.some((candidate) => candidate.path === root))
   assert(result.candidates.find((candidate) => candidate.path === root).signals.includes('llmwiki-root:hot+index-or-overview'))
+})
+
+test('runCli discover keeps detailed candidate format', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-runcli-discover-format-'))
+  mkdirSync(join(root, 'concepts'))
+  writeFileSync(join(root, 'index.md'), '---\nwiki_title: Detailed Wiki\nreview_state: approved\nsource_refs: [SRC]\n---\n# Detailed Wiki\n')
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const stdout = captureWritable()
+  await runCli(['discover', '--path', root], {
+    stdout,
+    stderr: captureWritable(),
+    async prompt() {
+      throw new Error('discover should not prompt')
+    },
+  })
+
+  assert.match(stdout.text, /confidence:/)
+  assert.match(stdout.text, /pages:/)
+  assert.match(stdout.text, /signals:/)
+  assert.doesNotMatch(stdout.text, /all\) start all listed candidates/)
+})
+
+test('discover validation reports actionable llmwiki-serve invocation failures', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-missing-serve-'))
+  mkdirSync(join(root, 'concepts'))
+  writeFileSync(join(root, 'index.md'), '---\nwiki_title: Missing Serve Wiki\nreview_state: approved\nsource_refs: [SRC]\n---\n# Missing Serve Wiki\n')
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const result = await discoverCandidates({
+    roots: [root],
+    validate: true,
+    serveInvocation: {
+      command: 'definitely-missing-llmwiki-serve-command',
+      baseArgs: [],
+      cwd: process.cwd(),
+    },
+  })
+
+  const candidate = result.candidates.find((entry) => entry.path === root)
+  assert(candidate)
+  assert.equal(candidate.startable, false)
+  assert.match(candidate.validationError, /Could not run llmwiki-serve command/)
+  assert.match(candidate.validationError, /--serve-command/)
 })
 
 test('parseCandidateSelection supports defaults, lists, all, cancel, and bounds checks', () => {
@@ -96,10 +173,74 @@ test('parseYesNo handles defaulted and explicit answers', () => {
   assert.throws(() => parseYesNo('maybe'), /Expected yes or no/)
 })
 
+test('startSources waits for source /health before marking a source ready', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-start-ready-'))
+  const source = join(root, 'wiki')
+  mkdirSync(source)
+  const serveScript = writeServeStubScript(root)
+  const configPath = join(root, 'sources.json')
+  const port = await freePort()
+
+  const result = await startSources({
+    paths: [source],
+    portStart: port,
+    serveInvocation: { command: process.execPath, baseArgs: [serveScript], cwd: root },
+    configPath,
+    logDir: join(root, 'logs'),
+    healthTimeoutMs: 2000,
+    healthIntervalMs: 50,
+  })
+
+  const pid = result.sources[0].processId
+  t.after(() => {
+    killPid(pid)
+  })
+
+  assert.equal(result.sources[0].status, 'ready')
+  assert.equal(result.sources[0].health.ok, true)
+  assert.equal(result.sources[0].url, `http://127.0.0.1:${port}`)
+  const health = await fetch(`http://127.0.0.1:${port}/health`)
+  assert.equal(health.status, 200)
+  assert.equal((await health.json()).status, 'ok')
+
+  const config = JSON.parse(readFileSync(configPath, 'utf8'))
+  assert.equal(config.sources[0].status, 'ready')
+  assert.equal(config.sources[0].health.ok, true)
+})
+
+test('startSources cleans up a spawned source when /health never becomes ready', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-start-unhealthy-'))
+  const source = join(root, 'wiki')
+  mkdirSync(source)
+  const pidFile = join(root, 'serve.pid')
+  const serveScript = writeServeStubScript(root, { neverHealthy: true, pidFile })
+  const port = await freePort()
+
+  await assert.rejects(
+    () => startSources({
+      paths: [source],
+      portStart: port,
+      serveInvocation: { command: process.execPath, baseArgs: [serveScript], cwd: root },
+      configPath: join(root, 'sources.json'),
+      logDir: join(root, 'logs'),
+      healthTimeoutMs: 300,
+      healthIntervalMs: 50,
+    }),
+    /Source server did not become healthy/,
+  )
+
+  const pid = Number(readFileSync(pidFile, 'utf8'))
+  t.after(() => {
+    killPid(pid)
+  })
+  await waitForProcessExit(pid, 3000)
+  assert.equal(isProcessAlive(pid), false)
+})
+
 test('quickstart can end after starting direct local source URLs without bridge setup', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '2', 'y', 'n']
+  const answers = ['y', '2x', '2', 'y', 'n']
   const io = {
     stdout,
     stderr: stdout,
@@ -175,8 +316,151 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.equal(calls.some((call) => call[0] === 'smoke'), false)
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+  assert.match(io.stdout.text, /\[2\/5\] Choose source folders/)
+  assert.match(io.stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.match(io.stdout.text, /  2\) second-wiki \(high\/70, 10 md\)/)
+  assert.doesNotMatch(io.stdout.text, /signals:/)
+  assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
   assert.match(io.stdout.text, /source URLs directly/)
+})
+
+test('quickstart renders pipe-friendly non-TTY prompts without color', async () => {
+  const stdout = captureWritable()
+  const stdin = Readable.from(['n\n'])
+
+  await quickstart(
+    {},
+    { stdin, stdout, stderr: stdout },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+    },
+  )
+
+  assert.match(stdout.text, /\[\?\] Auto-discover local LLMWiki\/knowledge source folders\? Default discovery scans the current user's home unless --path\/--workspace\/--cwd constrains it\. \[Y\/n\]:\n/)
+  assert.doesNotMatch(stdout.text, /\u001b\[/)
+})
+
+test('quickstart non-TTY text fallback fails invalid candidate input without reprompting forever', async () => {
+  const stdout = captureWritable()
+  const stdin = Readable.from(['y\n2x\n'])
+  const candidates = [
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+  ]
+
+  await assert.rejects(
+    () => quickstart(
+      { path: '.' },
+      { stdin, stdout, stderr: stdout },
+      {
+        resolveServeInvocation() {
+          return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+        },
+        async discoverCandidates(args) {
+          return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+        },
+      },
+    ),
+    /Invalid candidate selection/,
+  )
+
+  assert.match(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.doesNotMatch(stdout.text, /Enter candidate ranks/)
+})
+
+test('quickstart uses clack multiselect for TTY candidate selection', async (t) => {
+  const previousNoColor = process.env.NO_COLOR
+  process.env.NO_COLOR = '1'
+  t.after(() => {
+    if (previousNoColor === undefined) {
+      delete process.env.NO_COLOR
+    } else {
+      process.env.NO_COLOR = previousNoColor
+    }
+  })
+
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', 'y', 'n']
+
+  const candidates = [
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 2, path: 'second-wiki', score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      forceInteractiveCandidateSelection: true,
+      async prompt() {
+        return answers.shift()
+      },
+      clackPrompts: {
+        async multiselect(params) {
+          calls.push(['multiselect', params])
+          return [2]
+        },
+        isCancel(value) {
+          return value === Symbol.for('cancelled')
+        },
+        cancel(message) {
+          calls.push(['cancel', message])
+        },
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return {
+          ...candidate,
+          startable: true,
+          manifest: {
+            title: candidate.path,
+            source_id: candidate.path,
+            page_count: 3,
+            approved_page_count: 3,
+          },
+        }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'second-wiki',
+            title: 'second-wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+          }],
+        }
+      },
+    },
+  )
+
+  const multiselectCall = calls.find((call) => call[0] === 'multiselect')
+  assert(multiselectCall)
+  assert.equal(multiselectCall[1].message, 'Select source folders to start')
+  assert.deepEqual(multiselectCall[1].initialValues, [1])
+  assert.deepEqual(multiselectCall[1].options.map((option) => option.value), [1, 2])
+  assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', 'second-wiki']])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['second-wiki'])
+  assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
+  assert.doesNotMatch(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
+  assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
 })
 
 test('quickstart generates bridge setup command without executing it and runs delegated smoke when configured', async () => {
@@ -254,8 +538,73 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.smokeMode, 'delegated-runtime')
   assert.deepEqual(result.skipped, [])
   assert.equal(result.bridgeSetup.executed, false)
+  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
+  assert.match(stdout.text, /\[5\/5\] Register and smoke test/)
   assert.match(stdout.text, /Safe start command/)
   assert.match(stdout.text, /no global install/)
+})
+
+test('quickstart labels requested hybrid bridge smoke mode as hybrid', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y']
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', mode: 'hybrid' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: true, status: 'ok', url: bridgeUrl }
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        return {
+          bridgeUrl: args.bridgeUrl,
+          replace: args.replace,
+          payload: { sources: [{ id: 'first-wiki', url: 'http://127.0.0.1:11001' }] },
+          response: { ok: true },
+        }
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        return { bridgeUrl: args.bridgeUrl, mode: args.mode, status: { state: 'completed' }, text: '' }
+      },
+    },
+  )
+
+  assert.equal(result.smokeMode, 'hybrid')
+  assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'hybrid')
+  assert.match(stdout.text, /Running bridge smoke in hybrid mode/)
 })
 
 test('quickstart stops before start/register/smoke when selected validation fails', async () => {
@@ -687,4 +1036,94 @@ function captureWritable() {
     },
   })
   return stream
+}
+
+function writeServeStubScript(root, { neverHealthy = false, pidFile = '' } = {}) {
+  const script = join(root, `serve-stub-${neverHealthy ? 'unhealthy' : 'ready'}.mjs`)
+  writeFileSync(script, `import { writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+
+const [command, sourcePath, ...args] = process.argv.slice(2)
+
+if (command === 'manifest') {
+  console.log(JSON.stringify({
+    title: 'Ready Wiki',
+    source_id: 'ready-wiki',
+    page_count: 1,
+    approved_page_count: 1,
+  }))
+  process.exit(0)
+}
+
+if (command !== 'serve') {
+  console.error(\`Unexpected command: \${command} \${sourcePath || ''}\`)
+  process.exit(2)
+}
+
+const pidFile = ${JSON.stringify(pidFile)}
+if (pidFile) {
+  writeFileSync(pidFile, String(process.pid))
+}
+
+if (${JSON.stringify(Boolean(neverHealthy))}) {
+  setInterval(() => {}, 1000)
+} else {
+  const host = args[args.indexOf('--host') + 1] || '127.0.0.1'
+  const port = Number(args[args.indexOf('--port') + 1])
+  createServer((request, response) => {
+    if (request.url === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'ok' }))
+      return
+    }
+    response.writeHead(404, { 'content-type': 'text/plain' })
+    response.end('not found')
+  }).listen(port, host)
+}
+`, 'utf8')
+  return script
+}
+
+async function freePort() {
+  const server = createServer()
+  await new Promise((resolveListen) => {
+    server.listen(0, '127.0.0.1', resolveListen)
+  })
+  const { port } = server.address()
+  await new Promise((resolveClose) => {
+    server.close(resolveClose)
+  })
+  return port
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return
+    }
+    await new Promise((resolveDelay) => {
+      setTimeout(resolveDelay, 50)
+    })
+  }
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function killPid(pid) {
+  if (!pid || !isProcessAlive(pid)) {
+    return
+  }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    // Best-effort cleanup for tests.
+  }
 }

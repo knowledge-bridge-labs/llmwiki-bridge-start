@@ -48,5 +48,8 @@
     "check": "npm run lint && npm test && npm run pack:dry-run",
     "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
     "audit": "npm audit --omit=dev"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.7.0"
   }
 }
