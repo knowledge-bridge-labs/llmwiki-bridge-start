@@ -2,15 +2,169 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { discoverCandidates, mergeBridgeSources, parseArgs, registerSources, scoreCandidate } from '../src/index.mjs'
+import { discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, scoreCandidate } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
   assert.equal(parsed.command, 'discover')
   assert.deepEqual(parsed.options.path, ['a', 'b'])
   assert.equal(parsed.options.validate, true)
+})
+
+test('parseCandidateSelection supports defaults, lists, all, cancel, and bounds checks', () => {
+  const candidates = [
+    { rank: 1, path: 'one' },
+    { rank: 2, path: 'two' },
+    { rank: 3, path: 'three' },
+  ]
+
+  assert.deepEqual(parseCandidateSelection('', candidates).map((candidate) => candidate.path), ['one'])
+  assert.deepEqual(parseCandidateSelection('2, 3 2', candidates).map((candidate) => candidate.path), ['two', 'three'])
+  assert.deepEqual(parseCandidateSelection('all', candidates).map((candidate) => candidate.path), ['one', 'two', 'three'])
+  assert.deepEqual(parseCandidateSelection('q', candidates), [])
+  assert.throws(() => parseCandidateSelection('2x', candidates), /Invalid candidate selection/)
+  assert.throws(() => parseCandidateSelection('4', candidates), /out of range/)
+})
+
+test('parseYesNo handles defaulted and explicit answers', () => {
+  assert.equal(parseYesNo('', true), true)
+  assert.equal(parseYesNo('', false), false)
+  assert.equal(parseYesNo('yes'), true)
+  assert.equal(parseYesNo('n'), false)
+  assert.throws(() => parseYesNo('maybe'), /Expected yes or no/)
+})
+
+test('quickstart validates only selected candidates and merge-registers by default', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['2', 'y', 'y', 'n']
+  const io = {
+    stdout,
+    stderr: stdout,
+    async prompt() {
+      return answers.shift()
+    },
+  }
+  const candidates = [
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 2, path: 'second-wiki', score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    io,
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return {
+          ...candidate,
+          startable: true,
+          manifest: {
+            title: candidate.path,
+            source_id: candidate.path,
+            page_count: 3,
+            approved_page_count: 3,
+          },
+        }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'second-wiki',
+            name: 'second-wiki',
+            title: 'second-wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+          }],
+        }
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        return {
+          bridgeUrl: args.bridgeUrl,
+          replace: args.replace,
+          payload: { sources: [{ id: 'second-wiki', url: 'http://127.0.0.1:11001' }] },
+          response: { ok: true },
+        }
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        return { bridgeUrl: args.bridgeUrl, status: { state: 'completed' }, text: '' }
+      },
+    },
+  )
+
+  assert.equal(calls[0][0], 'discover')
+  assert.equal(calls[0][1].validate, false)
+  assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', 'second-wiki']])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['second-wiki'])
+  assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
+  assert.equal(calls.some((call) => call[0] === 'smoke'), false)
+  assert.deepEqual(result.skipped, ['smoke'])
+  assert.match(io.stdout.text, /Validation starts only after you choose candidates/)
+})
+
+test('quickstart stops before start/register/smoke when selected validation fails', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return '1'
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'bad-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: false, validationError: 'manifest failed' }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {}
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        return {}
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        return {}
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate'])
+  assert.deepEqual(result.skipped, ['start', 'register', 'smoke'])
+  assert.match(stdout.text, /No selected candidates validated successfully/)
 })
 
 test('scoreCandidate recognizes native llmwiki shape', () => {
@@ -101,6 +255,72 @@ test('discoverCandidates prefers Obsidian vault root over direct child wiki', as
   assert(!result.candidates.some((candidate) => candidate.path === wiki))
 })
 
+test('scoreCandidate recognizes supported app variant markers at default threshold', () => {
+  const variants = [
+    {
+      name: 'logseq-config',
+      signal: 'logseq:config',
+      setup(root) {
+        mkdirSync(join(root, 'logseq'), { recursive: true })
+        writeFileSync(join(root, 'logseq', 'config.edn'), '{}\n')
+      },
+    },
+    {
+      name: 'dendron',
+      signal: 'dendron:dendron.yml',
+      setup(root) {
+        writeFileSync(join(root, 'dendron.yml'), 'version: 5\n')
+      },
+    },
+    {
+      name: 'foam',
+      signal: 'foam:.foam',
+      setup(root) {
+        mkdirSync(join(root, '.foam'), { recursive: true })
+      },
+    },
+    {
+      name: 'quartz',
+      signal: 'quartz:config',
+      setup(root) {
+        writeFileSync(join(root, 'quartz.config.ts'), 'export default {}\n')
+      },
+    },
+  ]
+
+  for (const variant of variants) {
+    const root = mkdtempSync(join(tmpdir(), `llmwiki-${variant.name}-`))
+    variant.setup(root)
+
+    const scored = scoreCandidate(root)
+    assert(scored.score >= 30, `${variant.name} should meet the default discovery threshold`)
+    assert(['medium', 'high'].includes(scored.confidence), `${variant.name} should be medium or high confidence`)
+    assert(scored.signals.includes(variant.signal), `${variant.name} should report ${variant.signal}`)
+  }
+})
+
+test('scoreCandidate reports Logseq pages and journals as a low-confidence fallback marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-logseq-pages-journals-'))
+  mkdirSync(join(root, 'pages'), { recursive: true })
+  mkdirSync(join(root, 'journals'), { recursive: true })
+
+  const scored = scoreCandidate(root)
+  assert(scored.score >= 10 && scored.score < 30)
+  assert.equal(scored.confidence, 'low')
+  assert(scored.signals.includes('logseq:pages+journals'))
+})
+
+test('scoreCandidate reports Foam VS Code extension hints as a low-confidence fallback marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-foam-vscode-'))
+  mkdirSync(join(root, '.vscode'), { recursive: true })
+  writeFileSync(join(root, '.vscode', 'extensions.json'), '{"recommendations":["foam.foam-vscode"]}\n')
+
+  const scored = scoreCandidate(root)
+  assert(scored.score >= 10 && scored.score < 30)
+  assert.equal(scored.confidence, 'low')
+  assert(scored.signals.includes('foam:vscode-extension'))
+})
+
 test('discoverCandidates hides low-confidence generic folders unless minScore is lowered', async () => {
   const root = mkdtempSync(join(tmpdir(), 'llmwiki-low-generic-'))
   for (let index = 0; index < 5; index += 1) {
@@ -189,3 +409,20 @@ test('registerSources rejects source URLs with credentials before contacting bri
     /credentials/,
   )
 })
+
+function captureWritable() {
+  let text = ''
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      const value = chunk.toString()
+      text += value
+      callback()
+    },
+  })
+  Object.defineProperty(stream, 'text', {
+    get() {
+      return text
+    },
+  })
+  return stream
+}

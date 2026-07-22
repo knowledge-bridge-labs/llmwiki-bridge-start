@@ -10,7 +10,8 @@
 - [x] Run local package check.
 - [x] Run targeted local discovery validation.
 - [x] Restart local source servers with the new CLI and run bridge smoke.
-- [ ] Add interactive prompt flow for first-run UX.
+- [x] Add interactive prompt flow for first-run UX.
+- [x] Document supported source variants in README and docs.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

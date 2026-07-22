@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { createInterface } from 'node:readline'
 
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8788'
 const DEFAULT_HOST = '127.0.0.1'
@@ -64,10 +65,18 @@ const QUARTZ_CONFIGS = [
   'quartz.config.yml',
 ]
 
-export async function runCli(argv, io = { stdout: process.stdout, stderr: process.stderr }) {
+export async function runCli(argv, io = { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }) {
   const { command, options } = parseArgs(argv)
   if (options.help || command === 'help') {
     io.stdout.write(helpText())
+    return
+  }
+  if (command === 'quickstart') {
+    const json = boolOption(options.json)
+    const result = await quickstart(options, json ? { ...io, stdout: io.stderr || io.stdout } : io)
+    if (json) {
+      writeResult(result, options, io)
+    }
     return
   }
   if (!command || command === 'discover') {
@@ -122,6 +131,257 @@ export async function runCli(argv, io = { stdout: process.stdout, stderr: proces
     return
   }
   throw new Error(`Unknown command: ${command}`)
+}
+
+export async function quickstart(options = {}, io = { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, commands = {}) {
+  const runtime = {
+    discoverCandidates,
+    validateCandidate,
+    startSources,
+    registerSources,
+    smokeBridge,
+    resolveServeInvocation,
+    ...commands,
+  }
+  const output = io.stdout || process.stdout
+  const prompter = createQuickstartPrompter(io, { yes: boolOption(options.yes ?? options.y) })
+  const bridgeUrl = stringOption(options.bridge, DEFAULT_BRIDGE_URL)
+  const configPath = stringOption(options.config, defaultConfigPath())
+  const serveInvocation = runtime.resolveServeInvocation(options)
+  const roots = discoverRootsFromOptions(options)
+  const result = {
+    command: 'quickstart',
+    roots,
+    selected: [],
+    validated: [],
+    started: null,
+    registered: null,
+    smoked: null,
+    skipped: [],
+  }
+
+  try {
+    output.write('llmwiki-bridge-start quickstart\n')
+    output.write('1) Discovering candidates without validation. Validation starts only after you choose candidates.\n')
+    const discovery = await runtime.discoverCandidates({
+      roots,
+      maxDepth: intOption(options.depth, DEFAULT_MAX_DEPTH),
+      limit: intOption(options.limit, DEFAULT_DISCOVER_LIMIT),
+      minScore: intOption(options.minScore ?? options['min-score'], DEFAULT_MIN_SCORE),
+      validate: false,
+      serveInvocation,
+    })
+    result.discovery = discovery
+
+    if (!discovery.candidates.length) {
+      output.write('No LLMWiki candidates found. Try --path DIR or --min-score 10 for generic Markdown folders.\n')
+      result.skipped.push('selection', 'validation', 'start', 'register', 'smoke')
+      return result
+    }
+
+    output.write('\nCandidates:\n')
+    output.write(formatCandidates(discovery.candidates))
+
+    const selectionAnswer = await prompter.ask('Select candidates to validate/start (comma-separated ranks, "all", or "q"; default 1): ', '1')
+    const selected = parseCandidateSelection(selectionAnswer, discovery.candidates)
+    result.selected = selected.map(summarizeCandidateForFlow)
+    if (!selected.length) {
+      output.write('Quickstart cancelled before validation.\n')
+      result.skipped.push('validation', 'start', 'register', 'smoke')
+      return result
+    }
+
+    output.write(`\n2) Validating ${selected.length} selected candidate(s) with llmwiki-serve manifest.\n`)
+    const validated = await Promise.all(selected.map((candidate) => runtime.validateCandidate(candidate, serveInvocation)))
+    result.validated = validated.map(summarizeCandidateForFlow)
+    for (const candidate of validated) {
+      const name = candidate.manifest?.title || basename(candidate.path)
+      output.write(`- ${candidate.startable ? 'OK' : 'FAIL'} ${name} (${candidate.path})\n`)
+      if (!candidate.startable && candidate.validationError) {
+        output.write(`  ${candidate.validationError}\n`)
+      }
+    }
+    const startable = validated.filter((candidate) => candidate.startable)
+    if (!startable.length) {
+      output.write('No selected candidates validated successfully; stopping before start/register/smoke.\n')
+      result.skipped.push('start', 'register', 'smoke')
+      return result
+    }
+
+    if (!await confirmQuickstart(prompter, `3) Start ${startable.length} validated source server(s) on loopback?`, true)) {
+      output.write('Skipped start/register/smoke.\n')
+      result.skipped.push('start', 'register', 'smoke')
+      return result
+    }
+    result.started = await runtime.startSources({
+      paths: startable.map((candidate) => candidate.path),
+      host: stringOption(options.host, DEFAULT_HOST),
+      portStart: intOption(options.portStart ?? options['port-start'], DEFAULT_PORT_START),
+      ports: arrayOption(options.port).map((value) => Number.parseInt(value, 10)).filter(Number.isInteger),
+      serveInvocation,
+      configPath,
+      logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
+    })
+    output.write(`Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}\n`)
+
+    const registerMode = boolOption(options.replace) ? 'replace' : 'merge'
+    if (!await confirmQuickstart(prompter, `4) Register started source(s) with ${bridgeUrl} (${registerMode} mode)?`, true)) {
+      output.write('Skipped register/smoke.\n')
+      result.skipped.push('register', 'smoke')
+      return result
+    }
+    result.registered = await runtime.registerSources({
+      bridgeUrl,
+      configPath,
+      replace: boolOption(options.replace),
+    })
+    output.write(`Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.\n`)
+
+    if (!await confirmQuickstart(prompter, '5) Run an evidence-only bridge smoke query?', true)) {
+      output.write('Skipped smoke.\n')
+      result.skipped.push('smoke')
+      return result
+    }
+    result.smoked = await runtime.smokeBridge({
+      bridgeUrl,
+      query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
+    })
+    output.write(`Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}\n`)
+    return result
+  } finally {
+    prompter.close()
+  }
+}
+
+function createQuickstartPrompter(io, { yes = false } = {}) {
+  if (typeof io.prompt === 'function') {
+    return {
+      async ask(question, fallback = '') {
+        const answer = await io.prompt(question, fallback)
+        const trimmed = String(answer ?? '').trim()
+        return trimmed || fallback
+      },
+      close() {},
+    }
+  }
+  const input = io.stdin || process.stdin
+  const output = io.stdout || process.stdout
+  let readline = null
+  const queued = []
+  const waiters = []
+  let closed = false
+
+  function ensureReadline() {
+    if (readline) {
+      return
+    }
+    readline = createInterface({ input, crlfDelay: Infinity, terminal: Boolean(input.isTTY) })
+    readline.on('line', (line) => {
+      const waiter = waiters.shift()
+      if (waiter) {
+        waiter(line)
+      } else {
+        queued.push(line)
+      }
+    })
+    readline.on('close', () => {
+      closed = true
+      while (waiters.length) {
+        waiters.shift()(null)
+      }
+    })
+  }
+
+  async function readLine() {
+    ensureReadline()
+    if (queued.length) {
+      return queued.shift()
+    }
+    if (closed) {
+      return null
+    }
+    return new Promise((resolveLine) => {
+      waiters.push(resolveLine)
+    })
+  }
+
+  return {
+    async ask(question, fallback = '') {
+      if (yes) {
+        output.write(`${question}${fallback}\n`)
+        return fallback
+      }
+      output.write(question)
+      const answer = await readLine()
+      const trimmed = String(answer ?? '').trim()
+      return trimmed || fallback
+    },
+    close() {
+      readline?.close()
+    },
+  }
+}
+
+async function confirmQuickstart(prompter, question, fallback) {
+  const answer = await prompter.ask(`${question} ${fallback ? '[Y/n]' : '[y/N]'} `, fallback ? 'y' : 'n')
+  return parseYesNo(answer, fallback)
+}
+
+export function parseYesNo(value, fallback = false) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (!normalized) {
+    return Boolean(fallback)
+  }
+  if (['y', 'yes', 'true', '1'].includes(normalized)) {
+    return true
+  }
+  if (['n', 'no', 'false', '0'].includes(normalized)) {
+    return false
+  }
+  throw new Error(`Expected yes or no, got: ${value}`)
+}
+
+export function parseCandidateSelection(value, candidates, { fallback = '1' } = {}) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  const selection = normalized || fallback
+  if (['q', 'quit', 'cancel', 'none', 'no'].includes(selection)) {
+    return []
+  }
+  const rankMap = new Map(candidates.map((candidate, index) => [Number(candidate.rank || index + 1), candidate]))
+  if (selection === 'all' || selection === '*') {
+    return [...rankMap.keys()]
+      .sort((left, right) => left - right)
+      .map((rank) => rankMap.get(rank))
+  }
+  const entries = selection.split(/[,\s]+/).filter(Boolean)
+  if (!entries.length || entries.some((entry) => !/^\d+$/.test(entry))) {
+    throw new Error(`Invalid candidate selection: ${value}`)
+  }
+  const ranks = entries.map((entry) => Number.parseInt(entry, 10))
+  const selected = []
+  const seen = new Set()
+  for (const rank of ranks) {
+    if (!rankMap.has(rank)) {
+      throw new Error(`Candidate rank out of range: ${rank}`)
+    }
+    if (!seen.has(rank)) {
+      selected.push(rankMap.get(rank))
+      seen.add(rank)
+    }
+  }
+  return selected
+}
+
+function summarizeCandidateForFlow(candidate) {
+  return {
+    rank: candidate.rank,
+    path: candidate.path,
+    score: candidate.score,
+    confidence: candidate.confidence,
+    startable: candidate.startable,
+    manifest: candidate.manifest,
+    validationError: candidate.validationError,
+  }
 }
 
 export function parseArgs(argv) {
@@ -878,6 +1138,7 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -885,6 +1146,7 @@ Usage:
   llmwiki-bridge-start doctor [--bridge URL]
 
 Commands:
+  quickstart  Guided first-run flow: discover, choose, validate selected candidates, start, register, smoke.
   discover  Find likely LLMWiki/Obsidian/Logseq/Dendron/Foam/Quartz roots.
   start     Start llmwiki-serve for explicit source paths and write a source config.
   register  Upsert started or explicit sources in llmwiki-agent-bridge settings.

@@ -4,12 +4,24 @@
 
 - CLI argument parsing for repeated options.
 - Native LLMWiki scoring.
+- OpenWiki-compatible projection scoring using the native projection marker
+  family.
 - `skills/wiki` false-positive penalty.
 - Nested `wiki/` preference for non-app source containers.
 - Generated smoke artifact filtering.
 - `.llmwiki-work` internal `input/`, `sources/`, and e2e filtering.
 - App-root preference over direct child `wiki/`.
+- Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
+  Quartz source variants at the default discovery threshold.
+- Low-confidence fallback recognition for Logseq `pages/` plus `journals/`
+  graphs that do not include `logseq/config.edn`.
+- Low-confidence fallback recognition for Foam VS Code extension hints that do
+  not include `.foam/`.
 - Default hiding of low-confidence generic folders.
+- Lowered-threshold inclusion of generic Markdown fallback folders.
+- `discover --validate` manifest success and failure reporting using a
+  controlled `llmwiki-serve manifest` invocation.
+- `start` refusal to launch a source when manifest validation fails.
 - Bridge registry upsert by URL.
 - Bridge registry upsert by stable ID when source ports move.
 - Credential-bearing source URL rejection.

@@ -32,6 +32,7 @@
   },
   "files": [
     "bin/llmwiki-bridge-start.mjs",
+    "docs/supported-source-variants.md",
     "src",
     "README.md",
     "LICENSE"
