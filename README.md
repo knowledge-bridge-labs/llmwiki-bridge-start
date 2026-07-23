@@ -47,14 +47,22 @@ delegated-runtime mode; otherwise it uses evidence-only mode.
 
 Quickstart keeps the first selection list focused. By default it shows
 recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
-LLMWiki Markdown roots that do not look like examples, demos, starter projects,
-or e2e fixtures. Compatible app vaults and lower-priority candidates are hidden
-from that default list when at least one recommended source exists. Use
-`--include-additional` to include Obsidian, Logseq, Dendron, Foam, Quartz,
-example, demo, starter, and e2e candidates in the selectable list. The
-scriptable `discover` command remains broad and reports all candidates that
-meet its score threshold. If quickstart finds only additional candidates, it
-stops before selection and asks you to rerun with `--include-additional`.
+LLMWiki Markdown roots. Compatible app vaults, graphs, workspaces, generic
+Markdown folders, and noisy example/demo/starter/e2e paths are additional.
+Additional candidates are hidden from the default quickstart selection list
+when at least one recommended source exists. Use `--include-additional` to
+render recommended and additional candidates as separate selectable sections.
+If an app vault contains a strong direct child `wiki/` source, default
+quickstart presents the child as recommended and keeps the parent app vault in
+the additional section. If quickstart finds only additional candidates without
+`--include-additional`, it stops before selection and asks you to rerun with
+`--include-additional`.
+
+The scriptable `discover` command is inventory, not presentation. Within the
+directories it scans, it reports every candidate that meets its score threshold,
+including parent/child overlaps and app vault roots that also contain a strong
+child `wiki/` source. Noisy-path and additional-candidate filtering is a
+quickstart UX policy, not a broad-discover hiding rule.
 
 `--yes` is intended for local smoke automation: it accepts discovery and source
 startup defaults, selects the first candidate, and still skips optional bridge
@@ -62,15 +70,15 @@ setup unless `--setup-bridge` is also supplied.
 
 Default discovery scans the user home directory unless `--path`, `--cwd`, or
 `--workspace` is supplied. The scanner prefers optional local tools such as
-`fd`/`rg` when available and falls back to Node traversal. It skips dependency,
-cache, build, example, archive, generated smoke, runtime-log, transient
-download/editor, and OS folders, scores likely wiki roots, removes obvious
-child-folder duplicates, and optionally validates candidates with
-`llmwiki-serve manifest`. Pass `--path DIR` to intentionally scan a skipped
-folder such as Downloads or an examples directory. The default minimum score is
-`30`. Generic Markdown folders are capped below that default so frontmatter or
-file counts alone do not make broad home scans noisy; use `--min-score 10` when
-intentionally looking for plain Markdown folders.
+`fd`/`rg` when available and falls back to Node traversal. It scores likely
+wiki roots, exposes the markers behind each score, keeps parent/child overlap
+visible when both paths meet the score threshold, and optionally validates
+candidates with `llmwiki-serve manifest`. The default minimum score is `30`.
+Generic Markdown folders are often low confidence, so use `--min-score 10` when
+intentionally looking for plain Markdown folders. Broad scans still avoid
+dependency, cache, build, transient editor/download, and other infrastructure
+folders; pass an explicit `--path DIR` when you intentionally want to inspect a
+normally skipped area.
 
 ## Supported Source Variants
 
@@ -80,9 +88,9 @@ looks like a candidate; `--validate` is the compatibility check that asks
 
 | Variant | Meaning | Detection markers | Default confidence |
 | --- | --- | --- | --- |
-| Native LLMWiki/OpenWiki projection | An already-built projection intended to be served by `llmwiki-serve`. | `.wiki-compiler.json`; or structural projection combinations that include graph or projection metadata, such as `graph/graph.json`, projection frontmatter (`source_refs`, `review_state`, `wiki_title`), `hot.md` plus `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `hot.md` alone, and docs-like hub plus typed folders are not enough to classify Native. | Usually medium to high; high when multiple projection markers are present. |
-| LLMWiki Markdown | A source-like Markdown wiki root that `llmwiki-serve` can often read with its Markdown adapter, but that is not a compiled Native projection. | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus a hub file (`index.md`, `overview.md`, `hot.md`, or `critical_facts.md`), typed folders, and a larger Markdown set. | Usually medium to high; validate before treating it as startable. |
-| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a strong direct child `wiki/` source, discovery prefers that `wiki/` source; weak child `wiki/` folders stay suppressed in favor of the vault root. App markers keep the app variant label unless `.wiki-compiler.json` explicitly marks a compiled projection. | Medium before validation; higher only if projection markers are also present. |
+| Native LLMWiki/OpenWiki projection | An already-built projection intended to be served by `llmwiki-serve`. | `.wiki-compiler.json`; sidecar graph or projection metadata such as `graph/graph.json`; or structural projection combinations that include stronger projection frontmatter such as `source_refs` or `sources`, `hot.md` plus `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `review_state` alone, `wiki_title` alone, `hot.md` alone, and docs-like hub plus typed folders are not enough to classify Native. | Usually medium to high; high when multiple projection markers are present. |
+| LLMWiki Markdown | A source-like Markdown wiki root that `llmwiki-serve` can often read with its Markdown adapter, but that is not a compiled Native projection. | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus typed folders and either a strong hub pair (`hot.md` plus `index.md`/`overview.md`) or a hub file with a larger Markdown set. | Usually medium to high; validate before treating it as startable. |
+| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a strong direct child `wiki/` source, `discover` keeps both the vault root and child visible when both meet the score threshold. Default quickstart presents the child as recommended and the parent app vault as additional. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation; higher only if projection markers are also present. |
 | Logseq graph | A Logseq knowledge graph. | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | A Dendron workspace or vault root. | `dendron.yml`. | Medium. |
 | Foam workspace | A Foam Markdown workspace. | `.foam/`, or the weaker fallback of a VS Code extensions recommendation that mentions Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |

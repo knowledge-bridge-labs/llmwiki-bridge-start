@@ -28,10 +28,20 @@ onboarding harness.
 - Quickstart now keeps default source selection focused on recommended LLMWiki
   sources only. Compatible app vaults and noisy example/demo/starter/e2e
   candidates require `--include-additional`.
+- Discovery is now treated as broad scriptable inventory for inspected
+  directories. Parent/child overlaps stay visible when both candidates meet the
+  score threshold; quickstart owns the recommended/additional presentation
+  policy.
+- Quickstart now annotates hidden/additional candidates with reason categories:
+  app vault, noisy path, or generic Markdown.
 - `all` in quickstart now means all currently listed candidates, not every
   discovered candidate hidden by the quickstart display policy.
-- Discovery now prefers strong direct child `wiki/` sources inside app vaults
-  over the parent app vault, while weak child `wiki/` folders remain suppressed.
+- Strong direct child `wiki/` sources inside app vaults are recommended by
+  default quickstart, while the parent app vault remains discoverable and moves
+  to the additional section. Weak child `wiki/` folders remain below the default
+  discovery threshold.
+- Noisy-path quickstart matching is token-based, so substring-only names do not
+  get hidden accidentally.
 - The non-interactive `all` selector is labeled as advanced to reduce accidental
   broad source startup.
 - Discovery asks before scanning the current user's home directory and explains
@@ -48,7 +58,7 @@ onboarding harness.
 
 - `npm run check`
   - syntax checks passed
-  - Node test suite passed with 54 tests
+  - Node test suite passed with 62 tests
   - package dry-run passed
 - Quickstart smoke:
   - bare `llmwiki-bridge-start` with `n` prints the concrete scan root and exits
@@ -77,6 +87,9 @@ onboarding harness.
     Additional sections
   - after app-vault child `wiki/` preference, default home quickstart shows 5
     recommended source folders and hides 4 additional compatible candidates
+  - after discover/quickstart policy split, default home quickstart shows
+    recommended child wiki sources while additional app/generic/noisy candidates
+    stay hidden unless `--include-additional` is set
   - a targeted project scan with multiple local `wiki/` folders shows the two
     strong source-like `wiki/` roots as recommended candidates
   - a local source-like Markdown wiki is detected as `LLMWiki Markdown` and
@@ -92,7 +105,8 @@ onboarding harness.
 - `335098e` — Clarify quickstart source selection
 - `0536275` — Tighten quickstart source variant detection
 - `0f7e3e5` — Focus quickstart default candidate selection
-- pending — Prefer strong child wiki sources in app vaults
+- `b8af0d1` — Prefer strong child wiki sources in app vaults
+- pending — Separate discover inventory from quickstart presentation policy
 
 ## Follow-ups
 

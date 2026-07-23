@@ -13,8 +13,11 @@ coding-agent client can retrieve evidence.
   source-like LLMWiki Markdown roots, Obsidian vaults, Logseq graphs, Dendron
   workspaces, Foam workspaces, Quartz site sources, and generic Markdown
   fallback folders.
-- Prefer useful source boundaries over internal fixture, cache, build, and
-  generated workspace folders.
+- Keep scriptable discovery broad and transparent within the directories it
+  scans: show every candidate that meets the selected score threshold,
+  including parent/child overlap.
+- Keep quickstart source selection focused by presenting recommended sources
+  separately from additional app, workspace, graph, generic, and noisy paths.
 - Validate candidates through `llmwiki-serve manifest` when requested.
 - Start selected local sources on loopback ports.
 - Treat started `llmwiki-serve` source URLs as immediately useful even when the
@@ -42,14 +45,16 @@ coding-agent client can retrieve evidence.
 Discovery assigns scores from local filesystem markers. The default
 `--min-score` is `30`, so medium and high candidates are shown by default while
 plain low-confidence Markdown folders require an intentional lower threshold.
-Generic Markdown fallback scores are capped below the default threshold to keep
-broad home scans focused on structured source roots.
+`discover` is scriptable inventory: after traversal safety guards choose which
+directories to inspect, any candidate that meets the selected score threshold
+must remain visible even when it is an app vault root, a generic path, or a
+parent of a stronger child `wiki/` source.
 
 | Variant | Detection markers | Default confidence expectation |
 | --- | --- | --- |
-| Native LLMWiki/OpenWiki projection | `.wiki-compiler.json`; or structural projection combinations that include graph or projection metadata, such as `graph/graph.json`, projection frontmatter (`source_refs`, `review_state`, `wiki_title`), `hot.md` with `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `hot.md` plus index/overview alone, and docs-like hub plus typed folders must not classify a folder as Native. | Medium to high; high when multiple projection markers combine. |
-| LLMWiki Markdown | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus a hub file, typed folders, and a larger Markdown set. This is distinct from a compiled Native projection. | Medium to high; validation determines whether `llmwiki-serve` can start it. |
-| Obsidian vault | `.obsidian/` plus Markdown notes. Strong direct child `wiki/` sources are preferred over the vault root; weak child `wiki/` folders are suppressed in favor of the vault root. App markers keep the app variant label unless `.wiki-compiler.json` explicitly marks a compiled projection. | Medium before validation. |
+| Native LLMWiki/OpenWiki projection | `.wiki-compiler.json`; sidecar graph or projection metadata such as `graph/graph.json`; or structural projection combinations that include stronger projection frontmatter such as `source_refs` or `sources`, `hot.md` with `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `review_state` alone, `wiki_title` alone, `hot.md` plus index/overview alone, and docs-like hub plus typed folders must not classify a folder as Native. | Medium to high; high when multiple projection markers combine. |
+| LLMWiki Markdown | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus typed folders and either a strong hub pair (`hot.md` with `index.md` or `overview.md`) or a hub file with a larger Markdown set. This is distinct from a compiled Native projection. | Medium to high; validation determines whether `llmwiki-serve` can start it. |
+| Obsidian vault | `.obsidian/` plus Markdown notes. Strong direct child `wiki/` sources do not remove the vault root from `discover`; both paths remain visible when both meet the score threshold. Default quickstart recommends the child `wiki/` source and treats the parent app vault as additional. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation. |
 | Logseq graph | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | `dendron.yml`. | Medium. |
 | Foam workspace | `.foam/`, or the weaker fallback of a VS Code extension recommendation containing Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |
@@ -71,14 +76,22 @@ source server.
 - `discover` must be safe enough to run from a home directory by default.
 - `discover` output must expose the score, confidence, and marker signals that
   caused each candidate to appear.
-- Default discovery must favor medium/high-confidence candidates; low-confidence
-  generic Markdown fallback discovery must require lowering `--min-score`.
+- `discover` must report every candidate that meets the selected score
+  threshold after traversal safety guards have selected directories to inspect.
+  It must not hide parent/child overlap, app vault roots, or generic Markdown
+  folders for quickstart presentation reasons.
+- Default discovery uses the medium-confidence threshold; low-confidence
+  generic Markdown fallback discovery requires lowering `--min-score`.
+- Native LLMWiki/OpenWiki classification must require stronger projection
+  evidence such as `.wiki-compiler.json`, sidecar graph/projection metadata, or
+  `source_refs`/`sources` projection frontmatter. `review_state` or
+  `wiki_title` alone must not be treated as Native evidence.
 - Frontmatter-only Markdown folders must stay generic, even when they contain
-  projection-like fields such as `source_refs`, `review_state`, or
-  `wiki_title`.
+  weak projection-like fields such as `review_state` or `wiki_title`.
 - Docs-like Markdown folders with only hub files and typed folders must stay
   generic unless graph or projection metadata is also present.
-- Source-like Markdown wiki roots with a hub file, typed folders, and a larger
+- Source-like Markdown wiki roots with typed folders and either a strong hub
+  pair (`hot.md` with `index.md` or `overview.md`) or a hub file plus a larger
   Markdown set should be classified as LLMWiki Markdown rather than Native or
   low-confidence generic fallback.
 - `register` must merge by default and require explicit `--replace` to wipe the
@@ -89,9 +102,14 @@ source server.
 - `quickstart` must ask before discovery and make the default home-directory
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
 - `quickstart` must keep the default source selection list focused on
-  recommended LLMWiki source folders. Compatible app vaults and noisy
-  example/demo/starter/e2e candidates require `--include-additional` when at
-  least one recommended source exists.
+  recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
+  LLMWiki Markdown roots. Compatible app vaults, graphs, workspaces, generic
+  Markdown folders, and noisy example/demo/starter/e2e candidates are
+  additional and require `--include-additional` when at least one recommended
+  source exists.
+- If quickstart sees both an app vault root and a strong direct child `wiki/`
+  source, default quickstart must recommend the child and keep the parent app
+  vault in the additional section.
 - If quickstart finds only additional candidates without `--include-additional`,
   it must stop before selection, validation, or startup rather than selecting an
   app vault or fixture by default.
@@ -106,6 +124,7 @@ source server.
   source-start defaults, select the first candidate, and skip optional bridge
   setup unless `--setup-bridge` is also supplied.
 - Source URLs with credentials or unsupported schemes must be rejected.
-- Tests must cover scoring, duplicate suppression, generated-folder filtering,
-  supported-variant markers, default generic fallback behavior, manifest
-  validation behavior where practical, and registry merge safety.
+- Tests must cover scoring, discover parent/child overlap transparency,
+  quickstart recommended/additional presentation, supported-variant markers,
+  default generic fallback behavior, manifest validation behavior where
+  practical, and registry merge safety.

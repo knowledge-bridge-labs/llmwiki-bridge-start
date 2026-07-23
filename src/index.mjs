@@ -58,12 +58,16 @@ const QUICKSTART_NOISY_PATH_HINTS = [
   'demo',
   'e2e',
   'example',
+  'examples',
   'fixture',
   'sample',
   'smoke',
   'starter',
   'template',
 ]
+const ADDITIONAL_REASON_APP_VAULT = 'app-vault'
+const ADDITIONAL_REASON_GENERIC = 'generic-markdown'
+const ADDITIONAL_REASON_NOISY_PATH = 'noisy-path'
 const ANSI_CODES = {
   reset: '\u001b[0m',
   boldCyan: '\u001b[1;36m',
@@ -381,7 +385,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
     writeStatus(output, ui, 'ok', formatQuickstartCandidateCount(candidatePlan))
     if (candidatePlan.hiddenAdditionalCount > 0) {
-      writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} additional compatible candidate(s) hidden by default. Use --include-additional to show app vaults, examples, demos, and starter/e2e sources.`)
+      const reasonText = formatAdditionalReasonCounts(candidatePlan.additionalReasonCounts)
+      writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} additional compatible candidate(s) hidden by default${reasonText ? ` (${reasonText})` : ''}. Use --include-additional to show app vaults, examples, demos, and starter/e2e sources.`)
     }
     output.write(formatQuickstartCandidateGroups(candidatePlan.groups))
 
@@ -606,10 +611,11 @@ function planQuickstartCandidateSelection(candidates = [], options = {}) {
   const recommended = []
   const additional = []
   for (const candidate of candidates) {
-    if (isRecommendedQuickstartCandidate(candidate)) {
-      recommended.push(candidate)
+    const policy = quickstartCandidatePolicy(candidate)
+    if (policy.recommended) {
+      recommended.push({ ...candidate, quickstartReason: policy.reason })
     } else {
-      additional.push(candidate)
+      additional.push({ ...candidate, quickstartReason: policy.reason })
     }
   }
 
@@ -637,9 +643,12 @@ function planQuickstartCandidateSelection(candidates = [], options = {}) {
   const visibleCandidates = groups.flatMap((group) => group.candidates)
   return {
     includeAdditional,
+    recommended,
+    additional,
     recommendedCount: recommended.length,
     additionalCount: additional.length,
     hiddenAdditionalCount: showAdditional ? 0 : additional.length,
+    additionalReasonCounts: countQuickstartReasons(additional),
     visibleCandidates,
     groups,
   }
@@ -654,16 +663,44 @@ function rankQuickstartCandidates(candidates, startRank, quickstartGroup) {
   }))
 }
 
-function isRecommendedQuickstartCandidate(candidate = {}) {
-  return QUICKSTART_RECOMMENDED_VARIANTS.has(candidateVariant(candidate)) && !hasQuickstartNoisyPathHint(candidate.path)
+function quickstartCandidatePolicy(candidate = {}) {
+  const noisyPathHint = quickstartNoisyPathHint(candidate.path)
+  if (noisyPathHint) {
+    return { recommended: false, reason: `${ADDITIONAL_REASON_NOISY_PATH}:${noisyPathHint}` }
+  }
+  const variant = candidateVariant(candidate)
+  if (QUICKSTART_RECOMMENDED_VARIANTS.has(variant)) {
+    return { recommended: true, reason: 'recommended-llmwiki-source' }
+  }
+  if (isAppRootSignal(candidate)) {
+    return { recommended: false, reason: ADDITIONAL_REASON_APP_VAULT }
+  }
+  return { recommended: false, reason: ADDITIONAL_REASON_GENERIC }
 }
 
 function hasQuickstartNoisyPathHint(path = '') {
-  return normalizePath(path)
+  return Boolean(quickstartNoisyPathHint(path))
+}
+
+function quickstartNoisyPathHint(path = '') {
+  for (const part of normalizePath(path)
     .toLowerCase()
     .split(sep)
+    .filter(Boolean)) {
+    const tokens = pathSegmentTokens(part)
+    const hint = QUICKSTART_NOISY_PATH_HINTS.find((entry) => tokens.includes(entry))
+    if (hint) {
+      return hint
+    }
+  }
+  return ''
+}
+
+function pathSegmentTokens(segment) {
+  return String(segment || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
     .filter(Boolean)
-    .some((part) => QUICKSTART_NOISY_PATH_HINTS.some((hint) => part.includes(hint)))
 }
 
 function summarizeQuickstartCandidateSelection(plan) {
@@ -673,7 +710,36 @@ function summarizeQuickstartCandidateSelection(plan) {
     hiddenAdditionalCount: plan.hiddenAdditionalCount,
     includeAdditional: plan.includeAdditional,
     visibleCount: plan.visibleCandidates.length,
+    additionalReasonCounts: plan.additionalReasonCounts,
+    hiddenAdditional: plan.includeAdditional ? [] : plan.additional.map(summarizeCandidateForFlow),
   }
+}
+
+function countQuickstartReasons(candidates = []) {
+  const counts = {}
+  for (const candidate of candidates) {
+    const key = String(candidate.quickstartReason || 'other').split(':')[0] || 'other'
+    counts[key] = (counts[key] || 0) + 1
+  }
+  return counts
+}
+
+function formatAdditionalReasonCounts(counts = {}) {
+  const entries = Object.entries(counts).filter(([, count]) => count > 0)
+  if (!entries.length) {
+    return ''
+  }
+  return entries
+    .map(([reason, count]) => `${count} ${formatQuickstartReason(reason)}`)
+    .join(', ')
+}
+
+function formatQuickstartReason(reason = '') {
+  const key = String(reason).split(':')[0]
+  if (key === ADDITIONAL_REASON_APP_VAULT) return 'app vault'
+  if (key === ADDITIONAL_REASON_NOISY_PATH) return 'example/demo/starter/e2e-like path'
+  if (key === ADDITIONAL_REASON_GENERIC) return 'generic Markdown'
+  return key || 'other'
 }
 
 function formatQuickstartCandidateCount(plan) {
@@ -711,7 +777,10 @@ function formatQuickstartCandidateRows(candidates) {
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
       : `${candidate.markdownCount} md`
     const displayPath = candidate.path
-    return `  ${rank}) ${title} [${variant}] (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
+    const reason = candidate.quickstartGroup === 'additional' && candidate.quickstartReason
+      ? `\n     reason: ${formatQuickstartReason(candidate.quickstartReason)}`
+      : ''
+    return `  ${rank}) ${title} [${variant}] (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}${reason}`
   })
   return rows.join('\n')
 }
@@ -744,11 +813,7 @@ function classifyVariantFromSignals(signals = []) {
     || signal === 'name:openwiki'
     || signal === 'name:vault'
   ))
-  const hasProjectionFrontmatter = signals.some((signal) => (
-    signal === 'frontmatter:source_refs'
-    || signal === 'frontmatter:review_state'
-    || signal === 'frontmatter:wiki_title'
-  ))
+  const hasSourceRefs = signals.includes('frontmatter:source_refs')
 
   if (hasCompilerMarker) {
     return VARIANT_NATIVE_LLMWIKI
@@ -769,13 +834,16 @@ function classifyVariantFromSignals(signals = []) {
     return VARIANT_QUARTZ
   }
   if (
-    (hasNativeRoot && (hasSidecarGraph || hasProjectionFrontmatter))
-    || (hasTypedDir && (hasSidecarGraph || hasProjectionFrontmatter))
-    || (hasSidecarGraph && (hasNativeRoot || hasHubSignal || hasProjectionFrontmatter))
+    (hasNativeRoot && (hasSidecarGraph || hasSourceRefs))
+    || (hasTypedDir && (hasSidecarGraph || hasSourceRefs))
+    || (hasSidecarGraph && (hasNativeRoot || hasHubSignal || hasSourceRefs))
   ) {
     return VARIANT_NATIVE_LLMWIKI
   }
-  if (hasSourceLikeName && (hasHubSignal || hasNativeRoot) && hasTypedDir && hasLargeMarkdownSet) {
+  if (hasSourceLikeName && hasNativeRoot && hasTypedDir) {
+    return VARIANT_LLMWIKI_MARKDOWN
+  }
+  if (hasSourceLikeName && hasHubSignal && hasTypedDir && hasLargeMarkdownSet) {
     return VARIANT_LLMWIKI_MARKDOWN
   }
   return VARIANT_GENERIC_MARKDOWN
@@ -963,10 +1031,13 @@ function formatCandidateMultiselectOptions(candidates) {
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
       : `${candidate.markdownCount} md`
+    const reason = candidate.quickstartGroup === 'additional' && candidate.quickstartReason
+      ? `; ${formatQuickstartReason(candidate.quickstartReason)}`
+      : ''
     return {
       value: rank,
       label: `${rank}) ${title} [${variant}]`,
-      hint: `${candidate.confidence}/${candidate.score}, ${pageText} — ${candidate.path}`,
+      hint: `${candidate.confidence}/${candidate.score}, ${pageText}${reason} — ${candidate.path}`,
     }
   })
 }
@@ -1055,6 +1126,8 @@ function summarizeCandidateForFlow(candidate) {
     path: candidate.path,
     score: candidate.score,
     confidence: candidate.confidence,
+    variant: candidateVariant(candidate),
+    quickstartReason: candidate.quickstartReason,
     startable: candidate.startable,
     manifest: candidate.manifest,
     validationError: candidate.validationError,
@@ -1153,7 +1226,7 @@ export async function discoverCandidates({
       }
     }
   }
-  let candidates = removeDescendantCandidates(removeDuplicateParents([...discovered.values()]))
+  let candidates = [...discovered.values()]
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, Math.max(limit, 1))
     .map((candidate, index) => ({ ...candidate, rank: index + 1, confidence: confidenceForScore(candidate.score) }))
@@ -1645,69 +1718,6 @@ function addOrUpdateCandidate(map, candidate) {
   }
 }
 
-function removeDuplicateParents(candidates) {
-  return candidates.filter((candidate) => {
-    const directChildWiki = candidates.find((other) => (
-      other.path !== candidate.path
-      && dirname(other.path) === candidate.path
-      && basename(other.path).toLowerCase() === 'wiki'
-    ))
-    if (!directChildWiki) {
-      return true
-    }
-    if (isAppRootSignal(candidate)) {
-      return !isPreferredDirectWikiSource(directChildWiki)
-    }
-    return directChildWiki.score < candidate.score
-  })
-}
-
-function removeDescendantCandidates(candidates) {
-  return candidates.filter((candidate) => {
-    const directAppRootParent = candidates.find((other) => (
-      other.path !== candidate.path
-      && dirname(candidate.path) === other.path
-      && basename(candidate.path).toLowerCase() === 'wiki'
-      && isAppRootSignal(other)
-    ))
-    if (directAppRootParent) {
-      return isPreferredDirectWikiSource(candidate)
-    }
-    return !candidates.some((other) => (
-      other.path !== candidate.path
-      && other.score >= candidate.score
-      && isSourceRootSignal(other)
-      && isDescendantPath(candidate.path, other.path)
-    ))
-  })
-}
-
-function isSourceRootSignal(candidate) {
-  if (candidate.score < 30) {
-    return false
-  }
-  return candidate.signals.some((signal) => (
-    signal.startsWith('llmwiki-marker')
-    || signal.startsWith('llmwiki-root')
-    || signal.startsWith('hub-file')
-    || signal.startsWith('hub-files')
-    || signal.startsWith('obsidian')
-    || signal.startsWith('logseq')
-    || signal.startsWith('dendron')
-    || signal.startsWith('foam')
-    || signal.startsWith('quartz')
-  ))
-}
-
-function isPreferredDirectWikiSource(candidate = {}) {
-  return (
-    basename(candidate.path || '').toLowerCase() === 'wiki'
-    && candidate.score >= DEFAULT_MIN_SCORE
-    && QUICKSTART_RECOMMENDED_VARIANTS.has(candidateVariant(candidate))
-    && !hasQuickstartNoisyPathHint(candidate.path)
-  )
-}
-
 function isAppRootSignal(candidate) {
   return candidate.signals.some((signal) => (
     signal.startsWith('obsidian')
@@ -1716,11 +1726,6 @@ function isAppRootSignal(candidate) {
     || signal.startsWith('foam')
     || signal.startsWith('quartz')
   ))
-}
-
-function isDescendantPath(path, parent) {
-  const rel = relative(parent, path)
-  return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
 function* walkDirectories(root, maxDepth) {

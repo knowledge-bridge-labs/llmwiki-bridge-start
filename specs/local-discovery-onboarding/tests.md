@@ -12,8 +12,12 @@
 - Source-like Markdown wiki roots with `hot.md` plus `index.md`/`overview.md`
   remain `LLMWiki Markdown`, not Native, unless projection metadata or compiler
   markers are present.
+- Native classification requires stronger projection evidence such as
+  `.wiki-compiler.json`, sidecar graph/projection metadata, or `source_refs`;
+  `review_state` or `wiki_title` alone do not classify a folder as Native.
 - Frontmatter-only Markdown folders stay Generic Markdown, remain hidden at the
-  default threshold, and render as `[Generic Markdown]` in quickstart selection.
+  default discover threshold, and render as `[Generic Markdown]` when included
+  through a lowered threshold and `--include-additional`.
 - Docs-like folders with only hub files plus typed folders, or `hot.md` plus
   index/overview alone, stay Generic Markdown and remain hidden at the default
   threshold.
@@ -22,24 +26,28 @@
 - `skills/wiki` false-positive penalty.
 - Nested `wiki/` preference for non-app source containers.
 - Generated smoke artifact filtering.
-- `.llmwiki-work` internal `input/`, `sources/`, and e2e filtering.
+- `.llmwiki-work` internal `input/`, `sources/`, and e2e traversal filtering.
 - Fast discovery prefiltering through an injected scanner so tests do not
   depend on local OS tool availability.
 - JavaScript fallback scanner inclusion of marker-shaped roots and exclusion of
-  generated/dependency folders.
-- App-root/direct child `wiki/` duplicate handling: strong direct child `wiki/`
-  sources are preferred over Obsidian vault roots, while weak child `wiki/`
-  folders remain suppressed in favor of the app root.
+  dependency/cache/build/generated infrastructure folders.
+- `discover` reports parent/child overlap when both paths meet the score
+  threshold, including app vault roots with strong direct child `wiki/` sources.
+- Quickstart app-root/direct child `wiki/` handling: strong direct child `wiki/`
+  sources render as recommended, while the parent app vault renders in the
+  additional section and is hidden from default selection without
+  `--include-additional`.
 - Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
   Quartz source variants at the default discovery threshold, including exact
   variant IDs and user-facing labels.
 - Explicit app markers keep their app variant label over weak native-looking
-  structures unless the source has an explicit compiler marker.
+  structures unless the source has stronger projection evidence such as an
+  explicit compiler marker, sidecar graph metadata, or `source_refs`.
 - Low-confidence fallback recognition for Logseq `pages/` plus `journals/`
   graphs that do not include `logseq/config.edn`.
 - Low-confidence fallback recognition for Foam VS Code extension hints that do
   not include `.foam/`.
-- Default hiding of low-confidence generic folders.
+- Default threshold omission of low-confidence generic folders.
 - Lowered-threshold inclusion of generic Markdown fallback folders.
 - `discover --validate` manifest success and failure reporting using a
   controlled `llmwiki-serve manifest` invocation.
@@ -52,11 +60,13 @@
   scriptable listing command.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
-- Quickstart default source selection hides additional app/example/demo/starter
+- Quickstart default source selection hides additional app/generic/noisy
   candidates, keeps `all` scoped to the currently listed candidates, and
   validates/starts only recommended selections.
 - Quickstart `--include-additional` renders recommended and additional
-  candidates as separate sections and allows selecting the additional section.
+  candidates as separate sections, including app vaults, graphs, workspaces,
+  generic Markdown folders, and noisy paths, and allows selecting the
+  additional section.
 - Quickstart with only additional candidates stops before selection/validation
   unless `--include-additional` is set.
 - Quickstart TTY source selection routes through the checkbox multi-select

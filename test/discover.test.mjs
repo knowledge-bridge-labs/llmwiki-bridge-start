@@ -341,6 +341,7 @@ test('quickstart hides additional candidates by default and selects only recomme
     { rank: 2, path: 'hidden-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
     { rank: 3, path: 'starter-e2e-wiki', score: 90, confidence: 'high', markdownCount: 100, signals: ['llmwiki-marker:.wiki-compiler.json', 'markdown:50+'] },
     { rank: 4, path: join('project', 'wiki'), score: 65, confidence: 'high', markdownCount: 423, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+    { rank: 5, path: 'generic-notes', score: 35, confidence: 'medium', markdownCount: 12, signals: ['markdown:5+'] },
   ]
 
   const result = await quickstart(
@@ -384,15 +385,175 @@ test('quickstart hides additional candidates by default and selects only recomme
   assert.deepEqual(calls.filter((call) => call[0] === 'validate').map((call) => call[1]), ['recommended-native', join('project', 'wiki')])
   assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['recommended-native', join('project', 'wiki')])
   assert.equal(result.candidateSelection.recommendedCount, 2)
-  assert.equal(result.candidateSelection.additionalCount, 2)
-  assert.equal(result.candidateSelection.hiddenAdditionalCount, 2)
+  assert.equal(result.candidateSelection.additionalCount, 3)
+  assert.equal(result.candidateSelection.hiddenAdditionalCount, 3)
+  assert.deepEqual(result.candidateSelection.additionalReasonCounts, {
+    'app-vault': 1,
+    'noisy-path': 1,
+    'generic-markdown': 1,
+  })
+  assert.deepEqual(result.candidateSelection.hiddenAdditional.map((candidate) => candidate.path), ['hidden-obsidian', 'starter-e2e-wiki', 'generic-notes'])
   assert.match(stdout.text, /Found 2 recommended source folder\(s\)/)
   assert.match(stdout.text, /Recommended source folders:/)
-  assert.match(stdout.text, /2 additional compatible candidate\(s\) hidden by default/)
+  assert.match(stdout.text, /3 additional compatible candidate\(s\) hidden by default \(1 app vault, 1 example\/demo\/starter\/e2e-like path, 1 generic Markdown\)/)
   assert.match(stdout.text, /recommended-native \[Native LLMWiki\/OpenWiki\]/)
   assert.match(stdout.text, /wiki \[LLMWiki Markdown\]/)
   assert.doesNotMatch(stdout.text, /hidden-obsidian \[Obsidian vault\]/)
   assert.doesNotMatch(stdout.text, /starter-e2e-wiki/)
+  assert.doesNotMatch(stdout.text, /generic-notes/)
+})
+
+test('quickstart recommends strong child wiki while keeping parent app vault additional', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const vault = 'obsidian-vault'
+  const childWiki = join(vault, 'wiki')
+  const candidates = [
+    { rank: 1, path: childWiki, score: 90, confidence: 'high', markdownCount: 80, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+    { rank: 2, path: vault, score: 65, confidence: 'high', markdownCount: 120, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+  ]
+
+  const defaultResult = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.equal(defaultResult.candidateSelection.recommendedCount, 1)
+  assert.equal(defaultResult.candidateSelection.additionalCount, 1)
+  assert.match(stdout.text, /wiki \[LLMWiki Markdown\]/)
+  assert.doesNotMatch(stdout.text, /obsidian-vault \[Obsidian vault\]/)
+
+  const includeStdout = captureWritable()
+  const includeAnswers = ['y', 'q']
+  const includeResult = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
+    {
+      stdout: includeStdout,
+      stderr: includeStdout,
+      async prompt() {
+        return includeAnswers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.equal(includeResult.candidateSelection.visibleCount, 2)
+  assert.match(includeStdout.text, /Recommended source folders:/)
+  assert.match(includeStdout.text, /Additional compatible candidates:/)
+  assert.match(includeStdout.text, /obsidian-vault \[Obsidian vault\]/)
+  assert.match(includeStdout.text, /reason: app vault/)
+})
+
+test('quickstart include-additional can start an explicitly selected additional candidate', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '3', 'y', 'n']
+  const candidates = [
+    { rank: 1, path: 'recommended-native', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+    { rank: 2, path: 'hidden-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+    { rank: 3, path: 'generic-notes', score: 35, confidence: 'medium', markdownCount: 12, signals: ['markdown:5+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: candidate.path, source_id: candidate.path, page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: args.paths.map((path, index) => ({
+            id: path,
+            title: path,
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: `http://127.0.0.1:${11001 + index}`,
+          })),
+        }
+      },
+    },
+  )
+
+  assert.equal(result.candidateSelection.visibleCount, 3)
+  assert.deepEqual(result.selected.map((candidate) => candidate.path), ['generic-notes'])
+  assert.deepEqual(calls.filter((call) => call[0] === 'validate').map((call) => call[1]), ['generic-notes'])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['generic-notes'])
+  assert.match(stdout.text, /Additional compatible candidates:/)
+  assert.match(stdout.text, /generic-notes \[Generic Markdown\]/)
+  assert.match(stdout.text, /reason: generic Markdown/)
+})
+
+test('quickstart noisy path policy matches path tokens without substring false positives', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const candidates = [
+    { rank: 1, path: join('examples', 'wiki'), score: 90, confidence: 'high', markdownCount: 80, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+    { rank: 2, path: 'democracy-wiki', score: 90, confidence: 'high', markdownCount: 80, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.equal(result.candidateSelection.recommendedCount, 1)
+  assert.equal(result.candidateSelection.additionalCount, 1)
+  assert.deepEqual(result.candidateSelection.additionalReasonCounts, { 'noisy-path': 1 })
+  assert.match(stdout.text, /democracy-wiki \[LLMWiki Markdown\]/)
+  assert.doesNotMatch(stdout.text, /examples[\\/]+wiki/)
 })
 
 test('quickstart stops when only additional candidates exist without opt-in', async () => {
@@ -1043,7 +1204,7 @@ test('discoverCandidates hides llmwiki-work internal input and sources folders',
   assert(!result.candidates.some((candidate) => candidate.path === sources))
 })
 
-test('discoverCandidates prefers strong direct child wiki source over Obsidian vault root', async () => {
+test('discoverCandidates keeps both Obsidian vault root and strong direct child wiki source', async () => {
   const root = mkdtempSync(join(tmpdir(), 'llmwiki-obsidian-'))
   const wiki = join(root, 'wiki')
   mkdirSync(join(root, '.obsidian'), { recursive: true })
@@ -1054,9 +1215,61 @@ test('discoverCandidates prefers strong direct child wiki source over Obsidian v
   writeFileSync(join(wiki, 'concepts', 'topic.md'), '# Topic\n')
 
   const result = await discoverCandidates({ roots: [root], maxDepth: 3, validate: false })
-  assert(!result.candidates.some((candidate) => candidate.path === root))
   assert(result.candidates.some((candidate) => candidate.path === wiki))
+  assert(result.candidates.some((candidate) => candidate.path === root))
   assert.equal(result.candidates.find((candidate) => candidate.path === wiki).variant, 'native-llmwiki-openwiki')
+  assert.equal(result.candidates.find((candidate) => candidate.path === root).variant, 'obsidian-vault')
+})
+
+test('discoverCandidates keeps app roots and strong child wiki sources for supported app variants', async () => {
+  const variants = [
+    {
+      name: 'logseq',
+      variant: 'logseq-graph',
+      setup(root) {
+        mkdirSync(join(root, 'logseq'), { recursive: true })
+        writeFileSync(join(root, 'logseq', 'config.edn'), '{}\n')
+      },
+    },
+    {
+      name: 'dendron',
+      variant: 'dendron-workspace',
+      setup(root) {
+        writeFileSync(join(root, 'dendron.yml'), 'version: 5\n')
+      },
+    },
+    {
+      name: 'foam',
+      variant: 'foam-workspace',
+      setup(root) {
+        mkdirSync(join(root, '.foam'), { recursive: true })
+      },
+    },
+    {
+      name: 'quartz',
+      variant: 'quartz-source',
+      setup(root) {
+        writeFileSync(join(root, 'quartz.config.ts'), 'export default {}\n')
+      },
+    },
+  ]
+
+  for (const variant of variants) {
+    const root = mkdtempSync(join(tmpdir(), `llmwiki-${variant.name}-`))
+    const wiki = join(root, 'wiki')
+    variant.setup(root)
+    mkdirSync(join(wiki, 'concepts'), { recursive: true })
+    writeFileSync(join(root, 'root-note.md'), '# Root Note\n')
+    writeFileSync(join(wiki, 'index.md'), '---\nreview_state: approved\nsource_refs: [SRC]\n---\n# Index\n')
+    writeFileSync(join(wiki, 'hot.md'), '# Hot\n')
+    writeFileSync(join(wiki, 'concepts', 'topic.md'), '# Topic\n')
+
+    const result = await discoverCandidates({ roots: [root], maxDepth: 3, validate: false })
+    assert(result.candidates.some((candidate) => candidate.path === wiki), `${variant.name} child wiki missing`)
+    assert(result.candidates.some((candidate) => candidate.path === root), `${variant.name} root missing`)
+    assert.equal(result.candidates.find((candidate) => candidate.path === wiki).variant, 'native-llmwiki-openwiki')
+    assert.equal(result.candidates.find((candidate) => candidate.path === root).variant, variant.variant)
+  }
 })
 
 test('discoverCandidates keeps Obsidian vault root over weak direct child wiki', async () => {
@@ -1179,6 +1392,18 @@ test('scoreCandidate classifies native LLMWiki only from structural source marke
   assert(['medium', 'high'].includes(scored.confidence))
 })
 
+test('scoreCandidate treats sources frontmatter alias as strong projection evidence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-native-sources-alias-'))
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'index.md'), '---\nsources: [SRC]\n---\n# Index\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'native-llmwiki-openwiki')
+  assert(scored.signals.includes('frontmatter:source_refs'))
+})
+
 test('scoreCandidate classifies source-like Markdown wiki roots separately from native projections', async () => {
   const parent = mkdtempSync(join(tmpdir(), 'llmwiki-markdown-parent-'))
   const root = join(parent, 'wiki')
@@ -1198,6 +1423,21 @@ test('scoreCandidate classifies source-like Markdown wiki roots separately from 
   const result = await discoverCandidates({ roots: [parent], maxDepth: 2, validate: false })
   assert.equal(result.candidates[0].path, root)
   assert.equal(result.candidates[0].variant, 'llmwiki-markdown')
+})
+
+test('scoreCandidate accepts small source-like wiki roots with hot index and typed content as LLMWiki Markdown', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'small-llmwiki-markdown-parent-'))
+  const root = join(parent, 'wiki')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'index.md'), '# Small Wiki\n')
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'llmwiki-markdown')
+  assert.equal(scored.variantLabel, 'LLMWiki Markdown')
+  assert(scored.markdownCount < 50)
+  assert(scored.score >= 30)
 })
 
 test('source-like Markdown variants support explicit wiki root names', () => {
@@ -1252,6 +1492,22 @@ test('docs-like hot index typed folders stay generic without projection evidence
 
   const result = await discoverCandidates({ roots: [parent], maxDepth: 2, validate: false })
   assert.equal(result.candidates.length, 0)
+})
+
+test('review_state and wiki_title without source_refs do not classify docs-like folders as Native', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-docs-review-title-parent-'))
+  const root = join(parent, 'docs')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'index.md'), '---\nreview_state: approved\nwiki_title: Docs Like\n---\n# Index\n')
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert(scored.signals.includes('frontmatter:review_state'))
+  assert(scored.signals.includes('frontmatter:wiki_title'))
+  assert(!scored.signals.includes('frontmatter:source_refs'))
 })
 
 test('compiler marker still wins over source-like Markdown root shape', () => {
