@@ -17,8 +17,14 @@ onboarding harness.
 - Quickstart now prints the concrete scan root(s) before asking for discovery
   approval.
 - Candidate selection rows now include source variant labels such as Native
-  LLMWiki/OpenWiki, Obsidian vault, Logseq graph, Dendron workspace, Foam
-  workspace, Quartz source, or Generic Markdown.
+  LLMWiki/OpenWiki, LLMWiki Markdown, Obsidian vault, Logseq graph, Dendron
+  workspace, Foam workspace, Quartz source, or Generic Markdown.
+- Discovery now distinguishes compiled Native LLMWiki/OpenWiki projections from
+  source-like LLMWiki Markdown roots, while keeping generic Markdown capped
+  below the default threshold.
+- Frontmatter-only folders, docs-like hub plus typed folders, and `hot.md`
+  plus index/overview alone no longer classify as Native unless graph,
+  compiler, or projection metadata is present.
 - The non-interactive `all` selector is labeled as advanced to reduce accidental
   broad source startup.
 - Discovery asks before scanning the current user's home directory and explains
@@ -35,7 +41,7 @@ onboarding harness.
 
 - `npm run check`
   - syntax checks passed
-  - Node test suite passed with 36 tests
+  - Node test suite passed with 50 tests
   - package dry-run passed
 - Quickstart smoke:
   - bare `llmwiki-bridge-start` with `n` prints the concrete scan root and exits
@@ -53,6 +59,14 @@ onboarding harness.
 - GitHub `npx` smoke:
   - `npx.cmd --yes github:knowledge-bridge-labs/llmwiki-bridge-start`
   - verified candidate discovery output prints full paths without ellipses
+- Local package `npx --package <checkout>` smoke:
+  - bare no-subcommand invocation starts quickstart
+  - home scan with `y`, then `q`, prints full paths and variant labels
+  - broad home scan reduced noisy candidates from 13 to 9 after docs-like
+    false-positive removal
+  - `personal-agent\data\ai-scene\wiki` is detected as `LLMWiki Markdown` and
+    validates startable through `llmwiki-serve manifest`
+  - `langchain\langgraph\docs\docs` is hidden at the default threshold
 
 ## Commits
 
@@ -60,6 +74,8 @@ onboarding harness.
 - `121355a` — Add npm trusted publish workflow
 - `2db8d53` — Align npm publish workflow with trusted publishing docs
 - `1b54e90` — Show full quickstart candidate paths
+- `335098e` — Clarify quickstart source selection
+- pending — Tighten quickstart source variant detection
 
 ## Follow-ups
 

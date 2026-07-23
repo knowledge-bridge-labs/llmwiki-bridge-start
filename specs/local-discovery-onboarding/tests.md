@@ -6,6 +6,19 @@
 - Native LLMWiki scoring.
 - OpenWiki-compatible projection scoring using the native projection marker
   family.
+- `.wiki-compiler.json` native marker recognition.
+- Source-like Markdown wiki roots are classified as `LLMWiki Markdown`, default
+  visible, and not mislabeled as Native projection.
+- Source-like Markdown wiki roots with `hot.md` plus `index.md`/`overview.md`
+  remain `LLMWiki Markdown`, not Native, unless projection metadata or compiler
+  markers are present.
+- Frontmatter-only Markdown folders stay Generic Markdown, remain hidden at the
+  default threshold, and render as `[Generic Markdown]` in quickstart selection.
+- Docs-like folders with only hub files plus typed folders, or `hot.md` plus
+  index/overview alone, stay Generic Markdown and remain hidden at the default
+  threshold.
+- `.wiki-compiler.json` still takes precedence as Native and `.obsidian/` still
+  takes precedence as Obsidian over source-like Markdown root shape.
 - `skills/wiki` false-positive penalty.
 - Nested `wiki/` preference for non-app source containers.
 - Generated smoke artifact filtering.
@@ -16,7 +29,10 @@
   generated/dependency folders.
 - App-root preference over direct child `wiki/`.
 - Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
-  Quartz source variants at the default discovery threshold.
+  Quartz source variants at the default discovery threshold, including exact
+  variant IDs and user-facing labels.
+- Explicit app markers keep their app variant label over weak native-looking
+  structures unless the source has an explicit compiler marker.
 - Low-confidence fallback recognition for Logseq `pages/` plus `journals/`
   graphs that do not include `logseq/config.edn`.
 - Low-confidence fallback recognition for Foam VS Code extension hints that do

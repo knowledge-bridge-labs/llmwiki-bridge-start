@@ -56,9 +56,10 @@ cache, build, example, archive, generated smoke, runtime-log, transient
 download/editor, and OS folders, scores likely wiki roots, removes obvious
 child-folder duplicates, and optionally validates candidates with
 `llmwiki-serve manifest`. Pass `--path DIR` to intentionally scan a skipped
-folder such as Downloads or an examples directory.
-The default minimum score is `30`; use `--min-score 10` when intentionally
-looking for plain Markdown folders.
+folder such as Downloads or an examples directory. The default minimum score is
+`30`. Generic Markdown folders are capped below that default so frontmatter or
+file counts alone do not make broad home scans noisy; use `--min-score 10` when
+intentionally looking for plain Markdown folders.
 
 ## Supported Source Variants
 
@@ -68,13 +69,14 @@ looks like a candidate; `--validate` is the compatibility check that asks
 
 | Variant | Meaning | Detection markers | Default confidence |
 | --- | --- | --- | --- |
-| Native LLMWiki/OpenWiki projection | An already-built projection intended to be served by `llmwiki-serve`. | `.wiki-compiler.json`, `hot.md` plus `index.md` or `overview.md`, typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`, `graph/graph.json`, and projection frontmatter such as `source_refs`, `review_state`, or `wiki_title`. | Usually medium to high; high when multiple projection markers are present. |
-| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a direct child `wiki/`, discovery prefers the vault root. | Medium before validation; higher only if projection markers are also present. |
+| Native LLMWiki/OpenWiki projection | An already-built projection intended to be served by `llmwiki-serve`. | `.wiki-compiler.json`; or structural projection combinations that include graph or projection metadata, such as `graph/graph.json`, projection frontmatter (`source_refs`, `review_state`, `wiki_title`), `hot.md` plus `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `hot.md` alone, and docs-like hub plus typed folders are not enough to classify Native. | Usually medium to high; high when multiple projection markers are present. |
+| LLMWiki Markdown | A source-like Markdown wiki root that `llmwiki-serve` can often read with its Markdown adapter, but that is not a compiled Native projection. | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus a hub file (`index.md`, `overview.md`, `hot.md`, or `critical_facts.md`), typed folders, and a larger Markdown set. | Usually medium to high; validate before treating it as startable. |
+| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a direct child `wiki/`, discovery prefers the vault root. App markers keep the app variant label unless `.wiki-compiler.json` explicitly marks a compiled projection. | Medium before validation; higher only if projection markers are also present. |
 | Logseq graph | A Logseq knowledge graph. | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | A Dendron workspace or vault root. | `dendron.yml`. | Medium. |
 | Foam workspace | A Foam Markdown workspace. | `.foam/`, or the weaker fallback of a VS Code extensions recommendation that mentions Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |
 | Quartz site source | A Quartz site content repository. | `quartz.config.ts`, `.js`, `.yaml`, or `.yml`. | Medium. |
-| Generic Markdown fallback | A folder of Markdown or Org files without a known app or projection marker. | Markdown file counts, source-like folder names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, hub files, and projection-like frontmatter. | Low by default and usually hidden by the default `--min-score 30`; use `--min-score 10` for intentional fallback discovery. |
+| Generic Markdown fallback | A folder of Markdown or Org files without a known app or projection marker. | Markdown file counts, source-like folder names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, hub files, and projection-like frontmatter. | Low by default and capped below the default `--min-score 30`; use `--min-score 10` for intentional fallback discovery. |
 
 Confidence bands are score-based: `60+` is high, `30-59` is medium, `10-29` is
 low, and lower scores are hidden. Validation does not change the source files;
@@ -91,7 +93,7 @@ longer compatibility notes and non-goals.
 | Command | Purpose |
 | --- | --- |
 | no subcommand / `quickstart` | Guided first-run flow: optional discover, multi-select, validate/start sources, optional bridge setup, register, and A2A-style smoke. |
-| `discover` | Find local LLMWiki/Obsidian/Logseq/Foam/Dendron/Quartz/generic Markdown candidates. |
+| `discover` | Find local LLMWiki Markdown, Native LLMWiki/OpenWiki, Obsidian, Logseq, Foam, Dendron, Quartz, and generic Markdown candidates. |
 | `start` | Start `llmwiki-serve` on one or more selected local wiki paths. |
 | `register` | Upsert started or existing source URLs into `llmwiki-agent-bridge`. Use `--replace` only when intentionally replacing the registry. |
 | `smoke` | Run a bridge smoke request; defaults to evidence-only and accepts delegated-runtime or hybrid with `--mode`. |

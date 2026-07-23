@@ -125,6 +125,7 @@ test('runCli discover keeps detailed candidate format', async () => {
   })
 
   assert.match(stdout.text, /confidence:/)
+  assert.match(stdout.text, /variant: Native LLMWiki\/OpenWiki/)
   assert.match(stdout.text, /pages:/)
   assert.match(stdout.text, /signals:/)
   assert.doesNotMatch(stdout.text, /all\) start all listed candidates/)
@@ -253,7 +254,7 @@ test('quickstart can end after starting direct local source URLs without bridge 
     },
   }
   const candidates = [
-    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
     { rank: 2, path: 'second-wiki', score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
   ]
 
@@ -357,7 +358,7 @@ test('quickstart non-TTY text fallback fails invalid candidate input without rep
     'first-wiki',
   )
   const candidates = [
-    { rank: 1, path: longPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 1, path: longPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
   ]
 
   await assert.rejects(
@@ -411,7 +412,7 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   )
 
   const candidates = [
-    { rank: 1, path: firstPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 1, path: firstPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
     { rank: 2, path: secondPath, score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
   ]
 
@@ -521,7 +522,7 @@ test('quickstart generates bridge setup command without executing it and runs de
           roots: args.roots,
           count: 1,
           minScore: args.minScore,
-          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
         }
       },
       async validateCandidate(candidate) {
@@ -603,7 +604,7 @@ test('quickstart labels requested hybrid bridge smoke mode as hybrid', async () 
           roots: args.roots,
           count: 1,
           minScore: args.minScore,
-          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
         }
       },
       async validateCandidate(candidate) {
@@ -664,7 +665,7 @@ test('quickstart stops before start/register/smoke when selected validation fail
           roots: args.roots,
           count: 1,
           minScore: args.minScore,
-          candidates: [{ rank: 1, path: 'bad-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] }],
+          candidates: [{ rank: 1, path: 'bad-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
         }
       },
       async validateCandidate(candidate) {
@@ -852,7 +853,19 @@ test('discoverCandidates prefers Obsidian vault root over direct child wiki', as
 test('scoreCandidate recognizes supported app variant markers at default threshold', () => {
   const variants = [
     {
+      name: 'obsidian',
+      variant: 'obsidian-vault',
+      label: 'Obsidian vault',
+      signal: 'obsidian:.obsidian',
+      setup(root) {
+        mkdirSync(join(root, '.obsidian'), { recursive: true })
+        writeFileSync(join(root, 'note.md'), '# Obsidian note\n')
+      },
+    },
+    {
       name: 'logseq-config',
+      variant: 'logseq-graph',
+      label: 'Logseq graph',
       signal: 'logseq:config',
       setup(root) {
         mkdirSync(join(root, 'logseq'), { recursive: true })
@@ -861,6 +874,8 @@ test('scoreCandidate recognizes supported app variant markers at default thresho
     },
     {
       name: 'dendron',
+      variant: 'dendron-workspace',
+      label: 'Dendron workspace',
       signal: 'dendron:dendron.yml',
       setup(root) {
         writeFileSync(join(root, 'dendron.yml'), 'version: 5\n')
@@ -868,6 +883,8 @@ test('scoreCandidate recognizes supported app variant markers at default thresho
     },
     {
       name: 'foam',
+      variant: 'foam-workspace',
+      label: 'Foam workspace',
       signal: 'foam:.foam',
       setup(root) {
         mkdirSync(join(root, '.foam'), { recursive: true })
@@ -875,6 +892,8 @@ test('scoreCandidate recognizes supported app variant markers at default thresho
     },
     {
       name: 'quartz',
+      variant: 'quartz-source',
+      label: 'Quartz source',
       signal: 'quartz:config',
       setup(root) {
         writeFileSync(join(root, 'quartz.config.ts'), 'export default {}\n')
@@ -890,7 +909,275 @@ test('scoreCandidate recognizes supported app variant markers at default thresho
     assert(scored.score >= 30, `${variant.name} should meet the default discovery threshold`)
     assert(['medium', 'high'].includes(scored.confidence), `${variant.name} should be medium or high confidence`)
     assert(scored.signals.includes(variant.signal), `${variant.name} should report ${variant.signal}`)
+    assert.equal(scored.variant, variant.variant, `${variant.name} should use the expected variant`)
+    assert.equal(scored.variantLabel, variant.label, `${variant.name} should use the expected variant label`)
   }
+})
+
+test('explicit app markers take precedence over weak native-looking structure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-obsidian-native-looking-'))
+  mkdirSync(join(root, '.obsidian'), { recursive: true })
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'index.md'), '# Index\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'obsidian-vault')
+  assert.equal(scored.variantLabel, 'Obsidian vault')
+  assert(scored.signals.includes('llmwiki-root:hot+index-or-overview'))
+  assert(scored.signals.includes('obsidian:.obsidian'))
+})
+
+test('scoreCandidate classifies compiler-marked source as native LLMWiki', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-compiler-marked-'))
+  writeFileSync(join(root, '.wiki-compiler.json'), '{"version":1}\n')
+  writeFileSync(join(root, 'README.md'), '# Project wiki\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'native-llmwiki-openwiki')
+  assert.equal(scored.variantLabel, 'Native LLMWiki/OpenWiki')
+  assert(scored.score >= 30)
+  assert(scored.signals.includes('llmwiki-marker:.wiki-compiler.json'))
+})
+
+test('scoreCandidate classifies native LLMWiki only from structural source markers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-native-structure-'))
+  mkdirSync(join(root, 'concepts'))
+  mkdirSync(join(root, 'graph'))
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'overview.md'), '# Overview\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  writeFileSync(join(root, 'graph', 'graph.json'), '{"nodes":[],"edges":[]}\n')
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'native-llmwiki-openwiki')
+  assert.equal(scored.variantLabel, 'Native LLMWiki/OpenWiki')
+  assert(scored.score >= 30)
+  assert(['medium', 'high'].includes(scored.confidence))
+})
+
+test('scoreCandidate classifies source-like Markdown wiki roots separately from native projections', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-markdown-parent-'))
+  const root = join(parent, 'wiki')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'index.md'), '# Markdown wiki\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'llmwiki-markdown')
+  assert.equal(scored.variantLabel, 'LLMWiki Markdown')
+  assert(scored.score >= 30)
+  assert(['medium', 'high'].includes(scored.confidence))
+
+  const result = await discoverCandidates({ roots: [parent], maxDepth: 2, validate: false })
+  assert.equal(result.candidates[0].path, root)
+  assert.equal(result.candidates[0].variant, 'llmwiki-markdown')
+})
+
+test('source-like Markdown variants support explicit wiki root names', () => {
+  for (const name of ['wiki', 'llmwiki', 'openwiki', 'vault']) {
+    const parent = mkdtempSync(join(tmpdir(), `llmwiki-markdown-${name}-`))
+    const root = join(parent, name)
+    mkdirSync(join(root, 'concepts'), { recursive: true })
+    writeFileSync(join(root, 'index.md'), '# Markdown wiki\n')
+    writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+    for (let index = 0; index < 50; index += 1) {
+      writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+    }
+
+    const scored = scoreCandidate(root)
+    assert.equal(scored.variant, 'llmwiki-markdown', `${name} should be an LLMWiki Markdown root`)
+    assert.equal(scored.variantLabel, 'LLMWiki Markdown')
+  }
+})
+
+test('source-like Markdown wiki roots with hot and index are not mislabeled native', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-markdown-hot-index-parent-'))
+  const root = join(parent, 'wiki')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'index.md'), '# Index\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'llmwiki-markdown')
+  assert.equal(scored.variantLabel, 'LLMWiki Markdown')
+  assert(scored.signals.includes('llmwiki-root:hot+index-or-overview'))
+})
+
+test('docs-like hot index typed folders stay generic without projection evidence', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-docs-hot-index-parent-'))
+  const root = join(parent, 'docs')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'index.md'), '# Index\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(root, `guide-${index}.md`), `# Guide ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert(scored.score < 30)
+
+  const result = await discoverCandidates({ roots: [parent], maxDepth: 2, validate: false })
+  assert.equal(result.candidates.length, 0)
+})
+
+test('compiler marker still wins over source-like Markdown root shape', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-compiler-marked-wiki-parent-'))
+  const root = join(parent, 'wiki')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, '.wiki-compiler.json'), '{"version":1}\n')
+  writeFileSync(join(root, 'index.md'), '# Compiled wiki\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'native-llmwiki-openwiki')
+  assert.equal(scored.variantLabel, 'Native LLMWiki/OpenWiki')
+})
+
+test('Obsidian marker still wins over source-like Markdown root shape', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-obsidian-vault-root-parent-'))
+  const root = join(parent, 'vault')
+  mkdirSync(join(root, '.obsidian'), { recursive: true })
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'index.md'), '# Vault\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 50; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'obsidian-vault')
+  assert.equal(scored.variantLabel, 'Obsidian vault')
+})
+
+test('small source-like Markdown roots stay generic until explicitly requested', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'llmwiki-small-markdown-parent-'))
+  const root = join(parent, 'wiki')
+  mkdirSync(join(root, 'concepts'), { recursive: true })
+  writeFileSync(join(root, 'index.md'), '# Small wiki\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 5; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert(scored.score < 30)
+
+  const result = await discoverCandidates({ roots: [parent], maxDepth: 2, validate: false })
+  assert.equal(result.candidates.length, 0)
+})
+
+test('frontmatter-only Markdown folders stay generic and hidden by default', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-frontmatter-only-docs-'))
+  for (let index = 0; index < 12; index += 1) {
+    writeFileSync(
+      join(root, `doc-${index}.md`),
+      '---\nreview_state: approved\nwiki_title: Docs Folder\nsource_refs: [SRC]\n---\n# Doc\n',
+    )
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert.equal(scored.confidence, 'low')
+  assert(scored.score < 30)
+
+  const defaultResult = await discoverCandidates({ roots: [root], maxDepth: 1, validate: false })
+  assert.equal(defaultResult.candidates.length, 0)
+
+  const explicitResult = await discoverCandidates({ roots: [root], maxDepth: 1, minScore: 10, validate: false })
+  assert.equal(explicitResult.candidates.length, 1)
+  assert.equal(explicitResult.candidates[0].variant, 'generic-markdown')
+})
+
+test('docs-like hub and typed folders stay generic without projection evidence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-docs-like-'))
+  mkdirSync(join(root, 'concepts'))
+  writeFileSync(join(root, 'overview.md'), '# Overview\n')
+  writeFileSync(join(root, 'concepts', 'topic.md'), '# Topic\n')
+  for (let index = 0; index < 5; index += 1) {
+    writeFileSync(join(root, `guide-${index}.md`), `# Guide ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert.equal(scored.confidence, 'low')
+  assert(scored.score < 30)
+
+  const result = await discoverCandidates({ roots: [root], maxDepth: 1, validate: false })
+  assert.equal(result.candidates.length, 0)
+})
+
+test('hot plus index alone stays generic without projection evidence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-hot-index-only-'))
+  writeFileSync(join(root, 'hot.md'), '# Hot\n')
+  writeFileSync(join(root, 'index.md'), '# Index\n')
+  for (let index = 0; index < 5; index += 1) {
+    writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n`)
+  }
+
+  const scored = scoreCandidate(root)
+  assert.equal(scored.variant, 'generic-markdown')
+  assert.equal(scored.variantLabel, 'Generic Markdown')
+  assert.equal(scored.confidence, 'low')
+  assert(scored.score < 30)
+
+  const result = await discoverCandidates({ roots: [root], maxDepth: 1, validate: false })
+  assert.equal(result.candidates.length, 0)
+})
+
+test('quickstart labels frontmatter-only candidates as Generic Markdown', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const candidates = [{
+    rank: 1,
+    path: 'frontmatter-only-docs',
+    score: 25,
+    confidence: 'low',
+    markdownCount: 12,
+    variant: 'generic-markdown',
+    variantLabel: 'Generic Markdown',
+    signals: ['frontmatter:source_refs', 'frontmatter:review_state', 'frontmatter:wiki_title', 'markdown:5+'],
+  }]
+
+  const result = await quickstart(
+    { path: '.', minScore: '10' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.match(stdout.text, /frontmatter-only-docs \[Generic Markdown\] \(low\/25, 12 md\)/)
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
 
 test('scoreCandidate reports Logseq pages and journals as a low-confidence fallback marker', () => {
@@ -901,6 +1188,8 @@ test('scoreCandidate reports Logseq pages and journals as a low-confidence fallb
   const scored = scoreCandidate(root)
   assert(scored.score >= 10 && scored.score < 30)
   assert.equal(scored.confidence, 'low')
+  assert.equal(scored.variant, 'logseq-graph')
+  assert.equal(scored.variantLabel, 'Logseq graph')
   assert(scored.signals.includes('logseq:pages+journals'))
 })
 
@@ -912,6 +1201,8 @@ test('scoreCandidate reports Foam VS Code extension hints as a low-confidence fa
   const scored = scoreCandidate(root)
   assert(scored.score >= 10 && scored.score < 30)
   assert.equal(scored.confidence, 'low')
+  assert.equal(scored.variant, 'foam-workspace')
+  assert.equal(scored.variantLabel, 'Foam workspace')
   assert(scored.signals.includes('foam:vscode-extension'))
 })
 

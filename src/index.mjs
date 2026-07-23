@@ -26,6 +26,29 @@ const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
+const GENERIC_MARKDOWN_SCORE_CAP = 25
+const VARIANT_NATIVE_LLMWIKI = 'native-llmwiki-openwiki'
+const VARIANT_LLMWIKI_MARKDOWN = 'llmwiki-markdown'
+const VARIANT_OBSIDIAN = 'obsidian-vault'
+const VARIANT_LOGSEQ = 'logseq-graph'
+const VARIANT_DENDRON = 'dendron-workspace'
+const VARIANT_FOAM = 'foam-workspace'
+const VARIANT_QUARTZ = 'quartz-source'
+const VARIANT_GENERIC_MARKDOWN = 'generic-markdown'
+const VARIANT_LABELS = {
+  [VARIANT_NATIVE_LLMWIKI]: 'Native LLMWiki/OpenWiki',
+  [VARIANT_LLMWIKI_MARKDOWN]: 'LLMWiki Markdown',
+  [VARIANT_OBSIDIAN]: 'Obsidian vault',
+  [VARIANT_LOGSEQ]: 'Logseq graph',
+  [VARIANT_DENDRON]: 'Dendron workspace',
+  [VARIANT_FOAM]: 'Foam workspace',
+  [VARIANT_QUARTZ]: 'Quartz source',
+  [VARIANT_GENERIC_MARKDOWN]: 'Generic Markdown',
+}
+const ADAPTER_VARIANTS = {
+  'llmwiki-markdown': VARIANT_LLMWIKI_MARKDOWN,
+  'generic-markdown': VARIANT_GENERIC_MARKDOWN,
+}
 const ANSI_CODES = {
   reset: '\u001b[0m',
   boldCyan: '\u001b[1;36m',
@@ -570,37 +593,75 @@ function formatQuickstartCandidates(candidates) {
 }
 
 function candidateVariantLabel(candidate = {}) {
-  const signals = Array.isArray(candidate.signals) ? candidate.signals : []
   if (candidate.manifest?.adapter) {
-    return `${candidate.manifest.adapter} source`
+    const adapterVariant = ADAPTER_VARIANTS[candidate.manifest.adapter]
+    return adapterVariant ? VARIANT_LABELS[adapterVariant] : `${candidate.manifest.adapter} source`
   }
-  if (signals.some((signal) => (
-    signal.startsWith('llmwiki-marker')
-    || signal.startsWith('llmwiki-root')
-    || signal.startsWith('llmwiki-typed-dir')
-    || signal.startsWith('sidecar-graph')
-    || signal.startsWith('frontmatter:source_refs')
-    || signal.startsWith('frontmatter:review_state')
-    || signal.startsWith('frontmatter:wiki_title')
-  ))) {
-    return 'Native LLMWiki/OpenWiki'
+  return VARIANT_LABELS[candidateVariant(candidate)] || VARIANT_LABELS[VARIANT_GENERIC_MARKDOWN]
+}
+
+function candidateVariant(candidate = {}) {
+  if (candidate.variant && VARIANT_LABELS[candidate.variant]) {
+    return candidate.variant
   }
-  if (signals.some((signal) => signal.startsWith('obsidian'))) {
-    return 'Obsidian vault'
+  return classifyVariantFromSignals(Array.isArray(candidate.signals) ? candidate.signals : [])
+}
+
+function classifyVariantFromSignals(signals = []) {
+  const hasCompilerMarker = hasSignalPrefix(signals, 'llmwiki-marker')
+  const hasNativeRoot = hasSignalPrefix(signals, 'llmwiki-root')
+  const hasTypedDir = hasSignalPrefix(signals, 'llmwiki-typed-dir')
+  const hasSidecarGraph = hasSignalPrefix(signals, 'sidecar-graph')
+  const hasHubSignal = hasSignalPrefix(signals, 'hub-file')
+  const hasLargeMarkdownSet = signals.includes('markdown:50+')
+  const hasSourceLikeName = signals.some((signal) => (
+    signal === 'name:wiki'
+    || signal === 'name:llmwiki'
+    || signal === 'name:openwiki'
+    || signal === 'name:vault'
+  ))
+  const hasProjectionFrontmatter = signals.some((signal) => (
+    signal === 'frontmatter:source_refs'
+    || signal === 'frontmatter:review_state'
+    || signal === 'frontmatter:wiki_title'
+  ))
+
+  if (hasCompilerMarker) {
+    return VARIANT_NATIVE_LLMWIKI
   }
-  if (signals.some((signal) => signal.startsWith('logseq'))) {
-    return 'Logseq graph'
+  if (hasSignalPrefix(signals, 'obsidian')) {
+    return VARIANT_OBSIDIAN
   }
-  if (signals.some((signal) => signal.startsWith('dendron'))) {
-    return 'Dendron workspace'
+  if (hasSignalPrefix(signals, 'logseq')) {
+    return VARIANT_LOGSEQ
   }
-  if (signals.some((signal) => signal.startsWith('foam'))) {
-    return 'Foam workspace'
+  if (hasSignalPrefix(signals, 'dendron')) {
+    return VARIANT_DENDRON
   }
-  if (signals.some((signal) => signal.startsWith('quartz'))) {
-    return 'Quartz source'
+  if (hasSignalPrefix(signals, 'foam')) {
+    return VARIANT_FOAM
   }
-  return 'Generic Markdown'
+  if (hasSignalPrefix(signals, 'quartz')) {
+    return VARIANT_QUARTZ
+  }
+  if (hasSourceLikeName && (hasHubSignal || hasNativeRoot) && hasTypedDir && hasLargeMarkdownSet) {
+    return VARIANT_LLMWIKI_MARKDOWN
+  }
+  if (
+    (hasNativeRoot && (hasSidecarGraph || hasProjectionFrontmatter))
+    || (hasTypedDir && (hasSidecarGraph || hasProjectionFrontmatter))
+    || (hasSidecarGraph && (hasNativeRoot || hasHubSignal || hasProjectionFrontmatter))
+  ) {
+    return VARIANT_NATIVE_LLMWIKI
+  }
+  if (hasSourceLikeName && hasHubSignal && hasTypedDir && hasLargeMarkdownSet) {
+    return VARIANT_LLMWIKI_MARKDOWN
+  }
+  return VARIANT_GENERIC_MARKDOWN
+}
+
+function hasSignalPrefix(signals, prefix) {
+  return signals.some((signal) => signal.startsWith(prefix))
 }
 
 function compactText(value, maxLength) {
@@ -1682,10 +1743,17 @@ export function scoreCandidate(path) {
     signals.push('frontmatter:wiki_title')
   }
 
+  const variant = classifyVariantFromSignals(signals)
+  const normalizedScore = variant === VARIANT_GENERIC_MARKDOWN
+    ? Math.min(score, GENERIC_MARKDOWN_SCORE_CAP)
+    : score
+
   return {
     path: resolve(path),
-    score: Math.max(score, 0),
-    confidence: confidenceForScore(score),
+    score: Math.max(normalizedScore, 0),
+    confidence: confidenceForScore(normalizedScore),
+    variant,
+    variantLabel: VARIANT_LABELS[variant],
     markdownCount,
     signals,
   }
@@ -2560,6 +2628,7 @@ function formatCandidates(candidates) {
     const adapter = manifest?.adapter ? `\n    adapter: ${manifest.adapter}` : ''
     return `[${candidate.rank}] ${title}
     path: ${candidate.path}
+    variant: ${candidateVariantLabel(candidate)}
     confidence: ${candidate.confidence} (${candidate.score})
     pages: ${pageText}
     signals: ${candidate.signals.join(', ')}${adapter}${startable}`
@@ -2580,7 +2649,7 @@ Usage:
 
 Commands:
   quickstart  Guided first-run flow; also the default when no subcommand is provided.
-  discover  Find likely LLMWiki/Obsidian/Logseq/Dendron/Foam/Quartz roots.
+  discover  Find likely LLMWiki Markdown, Native, Obsidian, Logseq, Dendron, Foam, or Quartz roots.
   start     Start llmwiki-serve for explicit source paths and write a source config.
   register  Upsert started or explicit sources in llmwiki-agent-bridge settings.
   smoke     Run a small bridge query; defaults to evidence-only.

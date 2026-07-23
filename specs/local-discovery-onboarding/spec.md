@@ -10,8 +10,9 @@ coding-agent client can retrieve evidence.
 ## Goals
 
 - Discover likely local source roots for native LLMWiki/OpenWiki projections,
-  Obsidian vaults, Logseq graphs, Dendron workspaces, Foam workspaces, Quartz
-  site sources, and generic Markdown fallback folders.
+  source-like LLMWiki Markdown roots, Obsidian vaults, Logseq graphs, Dendron
+  workspaces, Foam workspaces, Quartz site sources, and generic Markdown
+  fallback folders.
 - Prefer useful source boundaries over internal fixture, cache, build, and
   generated workspace folders.
 - Validate candidates through `llmwiki-serve manifest` when requested.
@@ -41,16 +42,19 @@ coding-agent client can retrieve evidence.
 Discovery assigns scores from local filesystem markers. The default
 `--min-score` is `30`, so medium and high candidates are shown by default while
 plain low-confidence Markdown folders require an intentional lower threshold.
+Generic Markdown fallback scores are capped below the default threshold to keep
+broad home scans focused on structured source roots.
 
 | Variant | Detection markers | Default confidence expectation |
 | --- | --- | --- |
-| Native LLMWiki/OpenWiki projection | `.wiki-compiler.json`, `hot.md` with `index.md` or `overview.md`, typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`, `graph/graph.json`, and projection frontmatter such as `source_refs`, `review_state`, or `wiki_title`. | Medium to high; high when multiple projection markers combine. |
-| Obsidian vault | `.obsidian/` plus Markdown notes. Direct child `wiki/` folders are suppressed in favor of the vault root. | Medium before validation. |
+| Native LLMWiki/OpenWiki projection | `.wiki-compiler.json`; or structural projection combinations that include graph or projection metadata, such as `graph/graph.json`, projection frontmatter (`source_refs`, `review_state`, `wiki_title`), `hot.md` with `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `hot.md` plus index/overview alone, and docs-like hub plus typed folders must not classify a folder as Native. | Medium to high; high when multiple projection markers combine. |
+| LLMWiki Markdown | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus a hub file, typed folders, and a larger Markdown set. This is distinct from a compiled Native projection. | Medium to high; validation determines whether `llmwiki-serve` can start it. |
+| Obsidian vault | `.obsidian/` plus Markdown notes. Direct child `wiki/` folders are suppressed in favor of the vault root. App markers keep the app variant label unless `.wiki-compiler.json` explicitly marks a compiled projection. | Medium before validation. |
 | Logseq graph | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | `dendron.yml`. | Medium. |
 | Foam workspace | `.foam/`, or the weaker fallback of a VS Code extension recommendation containing Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |
 | Quartz site source | `quartz.config.ts`, `.js`, `.yaml`, or `.yml`. | Medium. |
-| Generic Markdown fallback | Markdown or Org file counts, source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, hub files, and projection-like frontmatter. | Low unless enough source-like hints lift the score to medium. |
+| Generic Markdown fallback | Markdown or Org file counts, source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, hub files, and projection-like frontmatter. | Low by default and capped below the default threshold. |
 
 Confidence is score-derived: `60+` is high, `30-59` is medium, `10-29` is low,
 and lower scores are omitted. Confidence is not a serving guarantee.
@@ -69,6 +73,14 @@ source server.
   caused each candidate to appear.
 - Default discovery must favor medium/high-confidence candidates; low-confidence
   generic Markdown fallback discovery must require lowering `--min-score`.
+- Frontmatter-only Markdown folders must stay generic, even when they contain
+  projection-like fields such as `source_refs`, `review_state`, or
+  `wiki_title`.
+- Docs-like Markdown folders with only hub files and typed folders must stay
+  generic unless graph or projection metadata is also present.
+- Source-like Markdown wiki roots with a hub file, typed folders, and a larger
+  Markdown set should be classified as LLMWiki Markdown rather than Native or
+  low-confidence generic fallback.
 - `register` must merge by default and require explicit `--replace` to wipe the
   bridge registry.
 - Invoking `llmwiki-bridge-start` without a subcommand must start the
