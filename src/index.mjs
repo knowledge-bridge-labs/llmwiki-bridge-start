@@ -343,7 +343,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 
   try {
     output.write(formatQuickstartBanner(ui))
-    writeStatus(output, ui, 'info', 'Start local Knowledge Source endpoints first; the agent bridge is optional.')
+    writeQuickstartIntro(output, ui)
 
     writeQuickstartStep(output, ui, 1, QUICKSTART_STEP_TOTAL, 'Discover sources')
     writeStatus(output, ui, 'info', 'Will scan these root folder(s):')
@@ -401,7 +401,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
 
     writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
-    if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback? This validates each selected folder first.`, true)) {
+    if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback?\nThis validates each selected folder first.`, true)) {
       writeStatus(output, ui, 'skip', 'Skipped source startup. No source servers were started.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
@@ -437,7 +437,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'info', 'Started source endpoint(s) are healthy. If you skip bridge setup, quickstart will print MCP Streamable HTTP registration URL(s).')
 
     writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Done: optionally add bridge')
-    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the direct local source endpoints are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
+    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}?\nIf you skip this, the direct local source endpoints are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
       output.write(formatCodingAgentRegistrationHandoff(result.started.sources))
       result.skipped.push('bridge-setup', 'register', 'smoke')
@@ -550,6 +550,12 @@ function formatQuickstartBanner(ui) {
   const padded = ` ${title} `
   const border = `+${'-'.repeat(padded.length)}+`
   return `${paint(ui, 'boldCyan', `${border}\n|${padded}|\n${border}`)}\n`
+}
+
+function writeQuickstartIntro(output, ui) {
+  writeStatus(output, ui, 'info', 'First time? llmwiki-* lets coding agents use local/project knowledge. llmwiki-serve exposes wiki folders as read-only HTTP/MCP sources.')
+  writeStatus(output, ui, 'info', 'llmwiki-agent-bridge is optional; add it when you want one bridge across multiple sources or runtime-backed answers.')
+  writeStatus(output, ui, 'info', 'This quickstart finds local wiki folders, starts llmwiki-serve for selected sources, then asks whether to set up the bridge.')
 }
 
 function writeQuickstartStep(output, ui, index, total, title) {
@@ -915,7 +921,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
       async ask(question, fallback = '') {
         output.write(formatQuickstartPrompt(question, { oneLine: promptOnOneLine }))
         output.write(`${fallback}\n`)
-        return fallback
+        return ''
       },
       async selectCandidates(candidates) {
         return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: false })
@@ -931,8 +937,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
       repromptYesNo: true,
       async ask(question, fallback = '') {
         const answer = await io.prompt(formatQuickstartPrompt(question, { oneLine: true }), fallback)
-        const trimmed = String(answer ?? '').trim()
-        return trimmed || fallback
+        return String(answer ?? '').trim()
       },
       async selectCandidates(candidates) {
         if (usesInteractiveCandidateSelection) {
@@ -999,8 +1004,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
     async ask(question, fallback = '') {
       output.write(formatQuickstartPrompt(question, { oneLine: promptOnOneLine }))
       const answer = await readLine()
-      const trimmed = String(answer ?? '').trim()
-      return trimmed || fallback
+      return String(answer ?? '').trim()
     },
     async selectCandidates(candidates) {
       if (usesInteractiveCandidateSelection) {
@@ -1092,9 +1096,11 @@ function candidateRank(candidate, index) {
 async function confirmQuickstart(prompter, question, fallback) {
   let attempts = 0
   while (true) {
-    const answer = await prompter.ask(`[?] ${question} ${fallback ? '[Y/n]' : '[y/N]'}`, fallback ? 'y' : 'n')
+    const answer = await prompter.ask(formatQuickstartYesNoQuestion(question, fallback), fallback ? 'y' : 'n')
     try {
-      return parseYesNo(answer, fallback)
+      const selected = parseYesNo(answer, fallback)
+      prompter.output?.write(formatQuickstartYesNoSelection(selected, String(answer ?? '').trim() === ''))
+      return selected
     } catch (error) {
       attempts += 1
       if (!prompter.repromptYesNo || attempts >= 5) {
@@ -1103,6 +1109,26 @@ async function confirmQuickstart(prompter, question, fallback) {
       prompter.output?.write(`[fail] ${error.message}. Enter "y" or "n".\n`)
     }
   }
+}
+
+function formatQuickstartYesNoQuestion(question, fallback) {
+  const promptLabel = fallback ? '[Y/n]' : '[y/N]'
+  const lines = String(question || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!lines.length) {
+    return `[?] ${promptLabel}`
+  }
+  if (lines.length === 1) {
+    return `[?] ${lines[0]} ${promptLabel}`
+  }
+  return [`[?] ${lines[0]}`, ...lines.slice(1), promptLabel].join('\n')
+}
+
+function formatQuickstartYesNoSelection(selected, defaulted) {
+  const label = selected ? 'Yes' : 'No'
+  return `[choice] Selected: ${defaulted ? `defaulted ${label}` : label}\n`
 }
 
 function formatQuickstartPrompt(question, { oneLine }) {
@@ -1238,7 +1264,7 @@ function formatQuickstartDiscoveryPrompt(options = {}) {
   const scopeText = constrained
     ? 'Discovery is constrained to the root(s) shown above.'
     : 'Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.'
-  return `Auto-discover local LLMWiki/knowledge source folders? ${scopeText}`
+  return `Auto-discover local LLMWiki/knowledge source folders?\n${scopeText}`
 }
 
 export async function discoverCandidates({

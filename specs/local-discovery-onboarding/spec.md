@@ -118,6 +118,12 @@ source server.
   users do not read them as a mandatory sequence.
 - `quickstart` must ask before discovery and make the default home-directory
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
+- `quickstart` must open with a concise first-time-user explanation of what
+  `llmwiki-*` does, what `llmwiki-serve` will expose, and why
+  `llmwiki-agent-bridge` is optional.
+- Long yes/no prompts must keep the main question and explanatory scope text on
+  separate lines, and every yes/no answer must be echoed as an explicit
+  transcript choice, including defaulted choices.
 - `quickstart` must keep the default source selection list focused on
   recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
   LLMWiki Markdown roots. Quickstart must explain that Native

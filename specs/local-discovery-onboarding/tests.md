@@ -90,6 +90,12 @@
 - Quickstart non-TTY source selection prints the concise numbered fallback list
   and keeps prompts on separate lines for piped input; interactive text fallback
   reprompts on invalid source selections rather than failing on the first typo.
+- Quickstart first-run transcript includes a short `llmwiki-*`,
+  `llmwiki-serve`, and optional `llmwiki-agent-bridge` explanation before
+  asking questions.
+- Quickstart yes/no prompts echo explicit and defaulted selections, and the
+  discovery prompt keeps the main question, scan-scope explanation, and
+  `[Y/n]` marker on separate lines.
 - Quickstart interactive yes/no prompts reprompt on invalid answers, while
   non-interactive automation avoids unbounded waiting.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,

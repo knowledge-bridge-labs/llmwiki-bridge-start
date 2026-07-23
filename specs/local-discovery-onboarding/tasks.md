@@ -24,6 +24,8 @@
   `/mcp/stream` URL per started source.
 - [x] Prefer a sibling `llmwiki-serve` checkout's `.venv` executable over
   `uv run` for long-running source servers when available.
+- [x] Improve first-run prompt transcript with a concise `llmwiki-*`
+  explanation, multiline discovery prompts, and explicit yes/no choice echoes.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

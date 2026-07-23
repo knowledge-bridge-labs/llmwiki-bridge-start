@@ -28,13 +28,19 @@ test('runCli starts quickstart when no subcommand is provided', async () => {
   })
 
   assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
+  assert(stdout.text.includes('llmwiki-* lets coding agents use local/project knowledge'))
+  assert(stdout.text.includes('llmwiki-agent-bridge is optional'))
+  assert(stdout.text.includes('This quickstart finds local wiki folders'))
   assert(stdout.text.includes('[1/5] Discover sources'))
   assert(stdout.text.includes('[info] Will scan these root folder(s):'))
   assert(stdout.text.includes(homedir()))
+  assert(stdout.text.includes('[choice] Selected: No'))
   assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Auto-discover/)
+  assert.match(prompts[0].question, /Auto-discover local LLMWiki\/knowledge source folders\?\nDefault discovery/)
+  assert.match(prompts[0].question, /\n\[Y\/n\]: $/)
   assert.match(prompts[0].question, /current user's home/)
 })
 
@@ -54,6 +60,7 @@ test('runCli keeps explicit quickstart available', async () => {
   assert(stdout.text.includes('[1/5] Discover sources'))
   assert(stdout.text.includes('[info] Will scan these root folder(s):'))
   assert(stdout.text.includes(homedir()))
+  assert(stdout.text.includes('[choice] Selected: No'))
   assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
@@ -79,6 +86,8 @@ test('quickstart discovery prompt explains constrained roots without the home-sc
   assert(stdout.text.includes(root))
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Discovery is constrained to the root\(s\) shown above/)
+  assert.match(prompts[0].question, /Auto-discover local LLMWiki\/knowledge source folders\?\nDiscovery is constrained/)
+  assert.match(prompts[0].question, /\n\[Y\/n\]: $/)
   assert.doesNotMatch(prompts[0].question, /current user's home/)
 })
 
@@ -104,6 +113,7 @@ test('quickstart reprompts invalid yes/no answers in interactive prompt fallback
 
   assert.match(stdout.text, /Expected yes or no/)
   assert.match(stdout.text, /Enter "y" or "n"/)
+  assert.match(stdout.text, /\[choice\] Selected: No/)
   assert.match(stdout.text, /\[skip\] Skipped discovery/)
 })
 
@@ -292,11 +302,13 @@ test('startSources cleans up a spawned source when /health never becomes ready',
 test('quickstart can end after starting direct local source URLs without bridge setup', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '2x', '2', 'y', 'n']
+  const answers = ['y', '2x', '2', 'y', '']
+  const prompts = []
   const io = {
     stdout,
     stderr: stdout,
-    async prompt() {
+    async prompt(question) {
+      prompts.push(question)
       return answers.shift()
     },
   }
@@ -378,6 +390,9 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
+  assert(prompts.some((prompt) => /Start 1 selected source server\(s\) on loopback\?\nThis validates each selected folder first\.\n\[Y\/n\]: $/.test(prompt)))
+  assert.match(io.stdout.text, /\[choice\] Selected: Yes/)
+  assert.match(io.stdout.text, /\[choice\] Selected: defaulted No/)
   assert.match(io.stdout.text, /Coding-agent MCP registration URLs:/)
   assert.match(io.stdout.text, /These are MCP-over-HTTP\/Streamable HTTP server URLs; exact client configuration syntax varies by client\./)
   assert.match(io.stdout.text, /  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
@@ -774,8 +789,34 @@ test('quickstart renders pipe-friendly non-TTY prompts without color', async () 
     },
   )
 
-  assert.match(stdout.text, /\[\?\] Auto-discover local LLMWiki\/knowledge source folders\? Default discovery scans the current user's home unless --path\/--workspace\/--cwd constrains it\. \[Y\/n\]:\n/)
+  assert.match(stdout.text, /\[\?\] Auto-discover local LLMWiki\/knowledge source folders\?\nDefault discovery scans the current user's home unless --path\/--workspace\/--cwd constrains it\.\n\[Y\/n\]:\n/)
+  assert.match(stdout.text, /\[choice\] Selected: No\n/)
   assert.doesNotMatch(stdout.text, /\u001b\[/)
+})
+
+test('quickstart logs defaulted yes/no selections in transcripts', async () => {
+  const stdout = captureWritable()
+  const stdin = Readable.from(['\nq\n'])
+  const candidates = [
+    { rank: 1, path: 'defaulted-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+  ]
+
+  const result = await quickstart(
+    {},
+    { stdin, stdout, stderr: stdout },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.equal(result.autoDiscover, true)
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
+  assert.match(stdout.text, /\[choice\] Selected: defaulted Yes\n/)
 })
 
 test('quickstart non-TTY text fallback fails invalid candidate input without reprompting forever', async () => {

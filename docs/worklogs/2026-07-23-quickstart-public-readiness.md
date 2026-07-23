@@ -124,6 +124,11 @@ onboarding harness.
   - a local source-like Markdown wiki is detected as `LLMWiki Markdown` and
     validates startable through `llmwiki-serve manifest`
   - a local docs-like folder is hidden at the default threshold
+  - the first-run transcript now explains `llmwiki-*`, `llmwiki-serve`, and the
+    optional `llmwiki-agent-bridge` before asking questions
+  - yes/no prompts now echo explicit and defaulted choices, and the discovery
+    prompt separates the question, scan-scope explanation, and `[Y/n]` marker
+    onto separate lines
 
 ## Commits
 
@@ -137,6 +142,7 @@ onboarding harness.
 - `b8af0d1` — Prefer strong child wiki sources in app vaults
 - `e6ecc3f` — Separate discover inventory from quickstart policy
 - `b73c2c8` — Polish quickstart candidate guidance
+- pending — Polish quickstart first-run transcript
 - pending — Improve customer onboarding flow
 
 ## Follow-ups
