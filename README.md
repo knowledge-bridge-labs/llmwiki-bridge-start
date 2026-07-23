@@ -28,13 +28,12 @@ asks before scanning the current user's home directory.
 
 Minimum success: when quickstart starts `llmwiki-serve` and reports healthy
 loopback source endpoints, first onboarding has succeeded. If you skip
-`llmwiki-agent-bridge`, quickstart prints a direct source handoff for each
-started source: source URL, health URL, manifest URL, MCP JSON-RPC URL
-(`/mcp`), and MCP Streamable HTTP URL (`/mcp/stream`). Use the source, health,
-and manifest URLs for local checks; use the MCP URLs and transport labels with
-coding agents or scripts that support MCP over HTTP. Exact client configuration
-syntax varies by client. `llmwiki-agent-bridge` can still be added later when
-you want source fan-out or one normalized bridge across sources.
+`llmwiki-agent-bridge`, quickstart prints one MCP Streamable HTTP registration
+URL per started source, using the `http://127.0.0.1:<port>/mcp/stream` shape.
+These are MCP-over-HTTP/Streamable HTTP server URLs for coding agents or
+scripts that support MCP over HTTP; exact client configuration syntax varies by
+client. `llmwiki-agent-bridge` can still be added later when you want source
+fan-out or one normalized bridge across sources.
 
 If `llmwiki-serve` is not on `PATH`, a sibling `../llmwiki-serve` checkout with
 an existing `.venv` is used automatically when available. Otherwise point the
@@ -55,9 +54,9 @@ selected folders only when you choose to start them, waits for started
 loopback source URLs to answer health checks, then explains that those URLs can
 be used directly without
 `llmwiki-agent-bridge`. Bridge setup is optional: if you skip it, quickstart
-prints a coding-agent registration handoff for each started source with the
-source, health, manifest, MCP JSON-RPC, and MCP Streamable HTTP endpoints. If
-you opt in, quickstart uses
+prints one coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`)
+per started source. If you opt in,
+quickstart uses
 an already running bridge or prints a safe start command such as
 `npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
 Quickstart runs that command only after a second explicit approval. Once a

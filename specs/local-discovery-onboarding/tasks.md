@@ -20,8 +20,8 @@
 - [x] Document supported source variants in README and docs.
 - [x] Document and test final public quickstart behavior, including default
   home-scan messaging and `--yes` behavior.
-- [x] Add skip-bridge direct-source coding-agent handoff output, including
-  source, health, manifest, MCP JSON-RPC, and MCP Streamable HTTP URLs.
+- [x] Add skip-bridge coding-agent MCP URL handoff output, with one
+  `/mcp/stream` URL per started source.
 - [x] Prefer a sibling `llmwiki-serve` checkout's `.venv` executable over
   `uv run` for long-running source servers when available.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.

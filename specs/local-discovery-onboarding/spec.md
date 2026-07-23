@@ -23,10 +23,10 @@ a low-friction way to find usable LLMWiki-compatible folders, start
 - Start selected local sources on loopback ports.
 - Treat started `llmwiki-serve` source endpoints as immediately useful even
   when the user skips `llmwiki-agent-bridge`.
-- When completing without `llmwiki-agent-bridge`, print a coding-agent
-  registration handoff for each started source that lists the source URL,
-  health URL, manifest URL, MCP JSON-RPC URL (`/mcp`), and MCP Streamable HTTP
-  URL (`/mcp/stream`) without claiming a specific client config syntax.
+- When completing without `llmwiki-agent-bridge`, print one coding-agent MCP
+  Streamable HTTP registration URL (`/mcp/stream`) for each started source,
+  with a concise MCP-over-HTTP/Streamable HTTP note and without claiming a
+  specific client config syntax.
 - Define first onboarding success as a reachable local source URL; bridge
   setup, bridge registration, and bridge smoke checks are optional next steps.
 - Make `llmwiki-agent-bridge` setup optional and explicit.
@@ -140,13 +140,12 @@ source server.
   optional.
 - After starting selected sources, `quickstart` must state that direct source
   endpoints are healthy and remain usable if the user skips bridge setup.
-- When the user skips bridge setup, `quickstart` must print a generic
-  coding-agent registration handoff for every started source, including source
-  URL, health URL, manifest URL, MCP JSON-RPC URL (`/mcp`), and MCP Streamable
-  HTTP URL (`/mcp/stream`).
-- The direct-source handoff must avoid client-specific MCP configuration syntax
-  and state that `llmwiki-agent-bridge` can still be added later for source
-  fan-out or one normalized bridge across sources.
+- When the user skips bridge setup, `quickstart` must print one generic
+  coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`) for every
+  started source.
+- The direct-source handoff must say the URLs are MCP-over-HTTP/Streamable HTTP
+  server URLs, avoid client-specific MCP configuration syntax, and omit
+  source, health, manifest, and MCP JSON-RPC endpoint labels.
 - `start`/`quickstart` must not report a launched source as ready until its
   loopback HTTP health endpoint responds within a bounded timeout.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user

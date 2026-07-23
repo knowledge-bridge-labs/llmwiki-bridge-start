@@ -378,22 +378,22 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
-  assert.match(io.stdout.text, /Coding-agent registration handoff:/)
-  assert.match(io.stdout.text, /Exact client configuration syntax varies by client/)
-  assert.match(io.stdout.text, /source URL: http:\/\/127\.0\.0\.1:11001/)
-  assert.match(io.stdout.text, /health URL: http:\/\/127\.0\.0\.1:11001\/health/)
-  assert.match(io.stdout.text, /manifest URL: http:\/\/127\.0\.0\.1:11001\/manifest/)
-  assert.match(io.stdout.text, /MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11001\/mcp/)
-  assert.match(io.stdout.text, /MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
-  assert.match(io.stdout.text, /llmwiki-agent-bridge later for source fan-out and one normalized bridge/)
+  assert.match(io.stdout.text, /Coding-agent MCP registration URLs:/)
+  assert.match(io.stdout.text, /These are MCP-over-HTTP\/Streamable HTTP server URLs; exact client configuration syntax varies by client\./)
+  assert.match(io.stdout.text, /  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
+  assert.doesNotMatch(io.stdout.text, /source URL:/)
+  assert.doesNotMatch(io.stdout.text, /health URL:/)
+  assert.doesNotMatch(io.stdout.text, /manifest URL:/)
+  assert.doesNotMatch(io.stdout.text, /MCP JSON-RPC URL/)
   assert.match(io.stdout.text, /\[4\/5\] Done: optionally add bridge/)
   assert.match(io.stdout.text, /direct local source endpoint\(s\)/)
-  assert(io.stdout.text.indexOf('Skipped bridge setup.') < io.stdout.text.indexOf('Coding-agent registration handoff:'))
-  assert.equal(countOccurrences(io.stdout.text, 'Coding-agent registration handoff:'), 1)
+  assert(io.stdout.text.indexOf('Skipped bridge setup.') < io.stdout.text.indexOf('Coding-agent MCP registration URLs:'))
+  assert.equal(countOccurrences(io.stdout.text, 'Coding-agent MCP registration URLs:'), 1)
+  assert.equal(countOccurrences(io.stdout.text, '/mcp/stream'), 1)
   assert.equal(countOccurrences(io.stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
 })
 
-test('quickstart skip-bridge handoff lists MCP endpoints for every started source', async () => {
+test('quickstart skip-bridge handoff lists one MCP stream URL for every started source', async () => {
   const stdout = captureWritable()
   const answers = ['y', 'all', 'y', 'n']
   const candidates = [
@@ -439,11 +439,13 @@ test('quickstart skip-bridge handoff lists MCP endpoints for every started sourc
 
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001', 'http://127.0.0.1:11002'])
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
-  assert.equal(countOccurrences(stdout.text, 'Coding-agent registration handoff:'), 1)
-  assert.equal(countOccurrences(stdout.text, 'MCP JSON-RPC URL (/mcp):'), 2)
-  assert.equal(countOccurrences(stdout.text, 'MCP Streamable HTTP URL (/mcp/stream):'), 2)
-  assert.match(stdout.text, /  - first-wiki\n    source URL: http:\/\/127\.0\.0\.1:11001\n    health URL: http:\/\/127\.0\.0\.1:11001\/health\n    manifest URL: http:\/\/127\.0\.0\.1:11001\/manifest\n    MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11001\/mcp\n    MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
-  assert.match(stdout.text, /  - second-wiki\n    source URL: http:\/\/127\.0\.0\.1:11002\n    health URL: http:\/\/127\.0\.0\.1:11002\/health\n    manifest URL: http:\/\/127\.0\.0\.1:11002\/manifest\n    MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11002\/mcp\n    MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11002\/mcp\/stream/)
+  assert.equal(countOccurrences(stdout.text, 'Coding-agent MCP registration URLs:'), 1)
+  assert.equal(countOccurrences(stdout.text, '/mcp/stream'), 2)
+  assert.match(stdout.text, /  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream\n  - http:\/\/127\.0\.0\.1:11002\/mcp\/stream/)
+  assert.doesNotMatch(stdout.text, /source URL:/)
+  assert.doesNotMatch(stdout.text, /health URL:/)
+  assert.doesNotMatch(stdout.text, /manifest URL:/)
+  assert.doesNotMatch(stdout.text, /MCP JSON-RPC URL/)
 })
 
 test('quickstart hides additional candidates by default and selects only recommended sources', async () => {

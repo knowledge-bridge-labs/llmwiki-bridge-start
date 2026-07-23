@@ -68,11 +68,10 @@ onboarding harness.
   from the runner PID when they differ.
 - Optional `llmwiki-agent-bridge` setup remains explicit; direct source URLs are
   a successful quickstart outcome.
-- Skip-bridge quickstart now prints a coding-agent registration handoff for
-  each started source with source, health, manifest, MCP JSON-RPC (`/mcp`), and
-  MCP Streamable HTTP (`/mcp/stream`) URLs, while avoiding client-specific
-  config syntax. The longer handoff is printed on the direct-source completion
-  path, not as mandatory bridge-setup noise.
+- Skip-bridge quickstart now prints one coding-agent MCP Streamable HTTP
+  registration URL (`/mcp/stream`) per started source while avoiding
+  client-specific config syntax. Extra source, health, manifest, and JSON-RPC
+  URL blocks are intentionally omitted from the direct-source completion path.
 - Quickstart now prefers a sibling `llmwiki-serve` checkout's `.venv`
   executable for long-running source server startup when present. This avoids
   using `uv run` as the detached server runner in the common local monorepo

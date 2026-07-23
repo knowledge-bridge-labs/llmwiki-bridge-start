@@ -30,10 +30,9 @@
      the Native LLMWiki/OpenWiki vs LLMWiki Markdown distinction inline.
    - Treat a healthy printed local source URL as the minimum successful
      onboarding outcome.
-   - When the user completes without bridge setup, print a generic coding-agent
-     registration handoff for each started source, including source, health,
-     manifest, MCP JSON-RPC (`/mcp`), and MCP Streamable HTTP (`/mcp/stream`)
-     URLs.
+   - When the user completes without bridge setup, print one generic
+     coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`) for each
+     started source.
 9. Add an optional bridge smoke command that uses evidence-only mode by default
    and delegated-runtime when an explicit LLM endpoint is configured.
 10. Verify with unit tests, package dry-run, targeted local discovery, and a
@@ -86,8 +85,8 @@
   visible through `--include-additional`.
 - Quickstart docs must define a printed healthy local source URL as the minimum
   successful onboarding outcome, with bridge setup clearly optional.
-- Quickstart docs must explain the skip-bridge direct-source coding-agent
-  handoff and avoid client-specific MCP configuration syntax.
+- Quickstart docs must explain the skip-bridge MCP registration URL handoff and
+  avoid client-specific MCP configuration syntax.
 - README Quick Start must move `discover`, `start`, `register`, and `smoke`
   examples into an advanced/scriptable commands section so they are not read as
   a mandatory first-run sequence.
