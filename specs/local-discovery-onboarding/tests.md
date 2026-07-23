@@ -98,6 +98,14 @@
   `[Y/n]` marker on separate lines.
 - Quickstart interactive yes/no prompts reprompt on invalid answers, while
   non-interactive automation avoids unbounded waiting.
+- Quickstart TTY yes/no prompts route through an immediate keypress-capable
+  confirm adapter so `y`/`n` completes without Enter, while injected prompt and
+  non-TTY fallback paths remain text-based.
+- Quickstart discovery progress renders a TTY spinner and records clear
+  non-TTY start/completion transcript lines.
+- Quickstart bridge setup copy explains bridge purpose and direct MCP skip
+  behavior before asking, and the background-start question says that
+  quickstart will run the command detached, write logs, and wait for health.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
 - CLI output may include full local paths for candidate disambiguation but must

@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { cancel as clackCancel, isCancel as isClackCancel, multiselect as clackMultiselect } from '@clack/prompts'
+import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, spinner as clackSpinner } from '@clack/prompts'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8788'
@@ -356,15 +356,23 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
     result.autoDiscover = true
 
-    writeStatus(output, ui, 'run', 'Discovering candidates without validation. Validation runs only if you start selected sources.')
-    const discovery = await runtime.discoverCandidates({
-      roots,
-      maxDepth: intOption(options.depth, DEFAULT_MAX_DEPTH),
-      limit: intOption(options.limit, DEFAULT_DISCOVER_LIMIT),
-      minScore: intOption(options.minScore ?? options['min-score'], DEFAULT_MIN_SCORE),
-      validate: false,
-      serveInvocation,
-    })
+    const discoveryProgress = createQuickstartDiscoveryProgress(io, ui)
+    discoveryProgress.start('Discovering candidates without validation. Validation runs only if you start selected sources.')
+    let discovery
+    try {
+      discovery = await runtime.discoverCandidates({
+        roots,
+        maxDepth: intOption(options.depth, DEFAULT_MAX_DEPTH),
+        limit: intOption(options.limit, DEFAULT_DISCOVER_LIMIT),
+        minScore: intOption(options.minScore ?? options['min-score'], DEFAULT_MIN_SCORE),
+        validate: false,
+        serveInvocation,
+      })
+      discoveryProgress.stop(formatQuickstartDiscoveryProgressSummary(discovery))
+    } catch (error) {
+      discoveryProgress.error('Discovery failed before candidate selection.')
+      throw error
+    }
     result.discovery = discovery
 
     if (!discovery.candidates.length) {
@@ -436,8 +444,10 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'ok', `Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}`)
     writeStatus(output, ui, 'info', 'Started source endpoint(s) are healthy. If you skip bridge setup, quickstart will print MCP Streamable HTTP registration URL(s).')
 
-    writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Done: optionally add bridge')
-    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}?\nIf you skip this, the direct local source endpoints are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
+    writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Optional bridge setup')
+    writeStatus(output, ui, 'info', 'llmwiki-agent-bridge is optional. Add it when you want one A2A/MCP-style endpoint that can fan out across all selected sources or use a configured LLM runtime.')
+    writeStatus(output, ui, 'info', 'If you skip bridge setup, the direct MCP Streamable HTTP URL(s) printed below are ready to use.')
+    if (!await confirmQuickstart(prompter, `Set up llmwiki-agent-bridge as one endpoint for the selected source(s)?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL(s).`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
       output.write(formatCodingAgentRegistrationHandoff(result.started.sources))
       result.skipped.push('bridge-setup', 'register', 'smoke')
@@ -507,7 +517,7 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
     continueToBridge: true,
   }
 
-  writeStatus(output, ui, 'info', 'The bridge is optional. Use it when you want one A2A/MCP-style endpoint for source fan-out and runtime-backed answers.')
+  writeStatus(output, ui, 'info', `No llmwiki-agent-bridge is reachable at ${bridgeUrl} yet. Quickstart can start one as a detached background process, or you can start it yourself in another terminal.`)
   output.write('Safe start command (no global install; npx uses the package cache, or a local checkout is used when available):\n')
   output.write(`  ${commandText}\n`)
 
@@ -517,7 +527,7 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
     writeStatus(output, ui, 'info', 'No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.')
   }
 
-  if (await confirmQuickstart(prompter, 'Run this bridge command now as a detached local process?', false)) {
+  if (await confirmQuickstart(prompter, `Start llmwiki-agent-bridge now in the background on ${bridgeUrl}?\nQuickstart will run the command above detached, write logs under ${logDir}, then wait for bridge health.`, false)) {
     const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: detectLlmRuntime(options) })
     Object.assign(result, { executed: true }, started)
     writeStatus(output, ui, 'run', `Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}`)
@@ -528,13 +538,13 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
     } catch (error) {
       result.health = { ok: false, error: error.message, url: bridgeUrl }
       writeStatus(output, ui, 'fail', `Bridge did not become reachable at ${bridgeUrl}: ${error.message}`)
-      result.continueToBridge = await confirmQuickstart(prompter, 'Continue with registration/smoke anyway?', false)
+      result.continueToBridge = await confirmQuickstart(prompter, 'Continue with registration/smoke anyway?\nChoose yes only if the bridge is already running or will become healthy during the check.', false)
     }
     return result
   }
 
   writeStatus(output, ui, 'info', `If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.`)
-  result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?`, false)
+  result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?\nChoose yes only if the bridge is already running or will become healthy during the check.`, false)
   return result
 }
 
@@ -564,6 +574,49 @@ function writeQuickstartStep(output, ui, index, total, title) {
 
 function writeStatus(output, ui, kind, message) {
   output.write(`${formatStatusMarker(ui, kind)} ${message}\n`)
+}
+
+function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstartUi(io)) {
+  const output = io.stdout || process.stdout
+  const useSpinner = shouldUseDiscoverySpinner(io)
+  const clackSpinnerFactory = io.clackPrompts?.spinner || clackSpinner
+  let spinner = null
+
+  return {
+    start(message) {
+      writeStatus(output, ui, 'run', message)
+      if (useSpinner) {
+        spinner = clackSpinnerFactory({ output })
+        spinner.start('Searching local folders for LLMWiki candidates...')
+      }
+    },
+    stop(message) {
+      if (spinner) {
+        spinner.stop(message)
+        return
+      }
+      writeStatus(output, ui, 'ok', message)
+    },
+    error(message) {
+      if (spinner?.error) {
+        spinner.error(message)
+        return
+      }
+      writeStatus(output, ui, 'fail', message)
+    },
+  }
+}
+
+function shouldUseDiscoverySpinner(io = {}) {
+  const output = io.stdout || process.stdout
+  return Boolean(io.forceDiscoverySpinner || (output.isTTY && typeof io.prompt !== 'function'))
+}
+
+function formatQuickstartDiscoveryProgressSummary(discovery) {
+  const count = Array.isArray(discovery?.candidates)
+    ? discovery.candidates.length
+    : Number(discovery?.count || 0)
+  return `Discovery complete: found ${count} candidate source folder(s).`
 }
 
 function formatStatusMarker(ui, kind) {
@@ -906,9 +959,12 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
   const promptOnOneLine = Boolean(input.isTTY && output.isTTY)
+  const usesInteractiveYesNo = shouldUseInteractiveYesNo(io, { yes })
   const usesInteractiveCandidateSelection = shouldUseInteractiveCandidateSelection(io, { yes })
   const clackPrompts = {
+    confirm: io.clackPrompts?.confirm || clackConfirm,
     multiselect: io.clackPrompts?.multiselect || clackMultiselect,
+    spinner: io.clackPrompts?.spinner || clackSpinner,
     isCancel: io.clackPrompts?.isCancel || isClackCancel,
     cancel: io.clackPrompts?.cancel || clackCancel,
   }
@@ -998,13 +1054,21 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   }
 
   return {
+    usesInteractiveYesNo,
     usesInteractiveCandidateSelection,
     output,
-    repromptYesNo: Boolean(input.isTTY && output.isTTY),
+    repromptYesNo: Boolean(!usesInteractiveYesNo && input.isTTY && output.isTTY),
     async ask(question, fallback = '') {
       output.write(formatQuickstartPrompt(question, { oneLine: promptOnOneLine }))
       const answer = await readLine()
       return String(answer ?? '').trim()
+    },
+    async confirm(question, fallback = false) {
+      if (!usesInteractiveYesNo) {
+        return null
+      }
+      closeReadlineBeforeClack()
+      return confirmYesNoWithClack(question, fallback, { clackPrompts, input, output })
     },
     async selectCandidates(candidates) {
       if (usesInteractiveCandidateSelection) {
@@ -1019,10 +1083,65 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   }
 }
 
+function shouldUseInteractiveYesNo(io = {}, { yes = false } = {}) {
+  const input = io.stdin || process.stdin
+  const output = io.stdout || process.stdout
+  return Boolean(!yes && (io.forceInteractiveYesNo || (typeof io.prompt !== 'function' && input.isTTY && output.isTTY)))
+}
+
 function shouldUseInteractiveCandidateSelection(io = {}, { yes = false } = {}) {
   const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
   return Boolean(!yes && (io.forceInteractiveCandidateSelection || (typeof io.prompt !== 'function' && input.isTTY && output.isTTY)))
+}
+
+async function confirmYesNoWithClack(question, fallback, { clackPrompts, input, output }) {
+  const keyTracker = trackClackConfirmDefault(input)
+  try {
+    const answer = await clackPrompts.confirm({
+      message: formatQuickstartYesNoClackMessage(question),
+      initialValue: Boolean(fallback),
+      input,
+      output,
+    })
+    if (clackPrompts.isCancel(answer)) {
+      clackPrompts.cancel('Quickstart cancelled.', { output })
+      return { selected: false, defaulted: false }
+    }
+    return { selected: Boolean(answer), defaulted: keyTracker.defaulted() }
+  } finally {
+    keyTracker.stop()
+  }
+}
+
+function trackClackConfirmDefault(input) {
+  let sawExplicitChoice = false
+  let defaulted = false
+
+  function onKeypress(value, key = {}) {
+    const text = String(value || '').toLowerCase()
+    if (text === 'y' || text === 'n' || ['left', 'right', 'up', 'down'].includes(key.name)) {
+      sawExplicitChoice = true
+      return
+    }
+    if (key.name === 'return' && !sawExplicitChoice) {
+      defaulted = true
+    }
+  }
+
+  input?.on?.('keypress', onKeypress)
+  return {
+    defaulted() {
+      return defaulted
+    },
+    stop() {
+      input?.off?.('keypress', onKeypress)
+    },
+  }
+}
+
+function formatQuickstartYesNoClackMessage(question) {
+  return String(question || '').trim()
 }
 
 async function selectCandidatesWithText(ask, candidates, { output, reprompt = false, maxAttempts = 5 } = {}) {
@@ -1094,6 +1213,16 @@ function candidateRank(candidate, index) {
 }
 
 async function confirmQuickstart(prompter, question, fallback) {
+  if (typeof prompter.confirm === 'function') {
+    const choice = await prompter.confirm(question, fallback)
+    if (choice !== null && choice !== undefined) {
+      const selected = typeof choice === 'object' ? Boolean(choice.selected) : Boolean(choice)
+      const defaulted = typeof choice === 'object' ? Boolean(choice.defaulted) : false
+      prompter.output?.write(formatQuickstartYesNoSelection(selected, defaulted))
+      return selected
+    }
+  }
+
   let attempts = 0
   while (true) {
     const answer = await prompter.ask(formatQuickstartYesNoQuestion(question, fallback), fallback ? 'y' : 'n')

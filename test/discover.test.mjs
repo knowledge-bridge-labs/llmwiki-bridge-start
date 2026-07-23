@@ -117,6 +117,80 @@ test('quickstart reprompts invalid yes/no answers in interactive prompt fallback
   assert.match(stdout.text, /\[skip\] Skipped discovery/)
 })
 
+test('quickstart TTY yes/no uses immediate clack confirm and discovery spinner adapters', async (t) => {
+  const previousNoColor = process.env.NO_COLOR
+  process.env.NO_COLOR = '1'
+  t.after(() => {
+    if (previousNoColor === undefined) {
+      delete process.env.NO_COLOR
+    } else {
+      process.env.NO_COLOR = previousNoColor
+    }
+  })
+
+  const stdout = captureTtyWritable()
+  const stdin = ttyReadable()
+  const confirmCalls = []
+  const spinnerCalls = []
+
+  const result = await quickstart(
+    { path: '.' },
+    {
+      stdin,
+      stdout,
+      stderr: stdout,
+      clackPrompts: {
+        async confirm(params) {
+          confirmCalls.push(params)
+          params.input.emit('keypress', 'y', { name: 'y' })
+          return true
+        },
+        spinner(params) {
+          spinnerCalls.push(['create', params])
+          return {
+            start(message) {
+              spinnerCalls.push(['start', message])
+            },
+            stop(message) {
+              spinnerCalls.push(['stop', message])
+            },
+            error(message) {
+              spinnerCalls.push(['error', message])
+            },
+          }
+        },
+        isCancel() {
+          return false
+        },
+        cancel(message) {
+          spinnerCalls.push(['cancel', message])
+        },
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: 0, minScore: args.minScore, candidates: [] }
+      },
+    },
+  )
+
+  assert.equal(result.autoDiscover, true)
+  assert.equal(confirmCalls.length, 1)
+  assert.match(confirmCalls[0].message, /Auto-discover local LLMWiki\/knowledge source folders\?/)
+  assert.equal(confirmCalls[0].initialValue, true)
+  assert.equal(confirmCalls[0].input, stdin)
+  assert.equal(confirmCalls[0].output, stdout)
+  assert.deepEqual(spinnerCalls.map((call) => call[0]), ['create', 'start', 'stop'])
+  assert.equal(spinnerCalls.find((call) => call[0] === 'start')[1], 'Searching local folders for LLMWiki candidates...')
+  assert.equal(spinnerCalls.find((call) => call[0] === 'stop')[1], 'Discovery complete: found 0 candidate source folder(s).')
+  assert.match(stdout.text, /\[choice\] Selected: Yes/)
+  assert.match(stdout.text, /\[run\] Discovering candidates without validation/)
+  assert.doesNotMatch(stdout.text, /\[Y\/n\]:/)
+})
+
 test('runCli keeps explicit discover as the scriptable listing command', async () => {
   const root = mkdtempSync(join(tmpdir(), 'llmwiki-runcli-discover-'))
   mkdirSync(join(root, 'concepts'))
@@ -390,9 +464,13 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
+  assert.match(io.stdout.text, /\[ok\] Discovery complete: found 2 candidate source folder\(s\)\./)
   assert(prompts.some((prompt) => /Start 1 selected source server\(s\) on loopback\?\nThis validates each selected folder first\.\n\[Y\/n\]: $/.test(prompt)))
+  assert(prompts.some((prompt) => /Set up llmwiki-agent-bridge as one endpoint for the selected source\(s\)\?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL\(s\)\.\n\[y\/N\]: $/.test(prompt)))
   assert.match(io.stdout.text, /\[choice\] Selected: Yes/)
   assert.match(io.stdout.text, /\[choice\] Selected: defaulted No/)
+  assert.match(io.stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
+  assert.match(io.stdout.text, /If you skip bridge setup, the direct MCP Streamable HTTP URL\(s\) printed below are ready to use\./)
   assert.match(io.stdout.text, /Coding-agent MCP registration URLs:/)
   assert.match(io.stdout.text, /These are MCP-over-HTTP\/Streamable HTTP server URLs; exact client configuration syntax varies by client\./)
   assert.match(io.stdout.text, /  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
@@ -400,7 +478,7 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.doesNotMatch(io.stdout.text, /health URL:/)
   assert.doesNotMatch(io.stdout.text, /manifest URL:/)
   assert.doesNotMatch(io.stdout.text, /MCP JSON-RPC URL/)
-  assert.match(io.stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.match(io.stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.match(io.stdout.text, /direct local source endpoint\(s\)/)
   assert(io.stdout.text.indexOf('Skipped bridge setup.') < io.stdout.text.indexOf('Coding-agent MCP registration URLs:'))
   assert.equal(countOccurrences(io.stdout.text, 'Coding-agent MCP registration URLs:'), 1)
@@ -819,6 +897,36 @@ test('quickstart logs defaulted yes/no selections in transcripts', async () => {
   assert.match(stdout.text, /\[choice\] Selected: defaulted Yes\n/)
 })
 
+test('quickstart records discovery progress start and completion in non-TTY transcripts', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const candidates = [
+    { rank: 1, path: 'progress-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+  ]
+
+  await quickstart(
+    { path: '.' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.match(stdout.text, /\[run\] Discovering candidates without validation\. Validation runs only if you start selected sources\./)
+  assert.match(stdout.text, /\[ok\] Discovery complete: found 1 candidate source folder\(s\)\./)
+})
+
 test('quickstart non-TTY text fallback fails invalid candidate input without reprompting forever', async () => {
   const stdout = captureWritable()
   const stdin = Readable.from(['y\n2x\n'])
@@ -971,7 +1079,7 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert(stdout.text.includes(secondPath))
   assert(!stdout.text.includes(`${firstPath.slice(0, 93)}...`))
   assert(!stdout.text.includes(`${secondPath.slice(0, 93)}...`))
-  assert.match(stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.equal(countOccurrences(stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
 })
@@ -1043,12 +1151,14 @@ test('quickstart generates bridge setup command without executing it and runs de
   const calls = []
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', 'n', 'y']
+  const prompts = []
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788', 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
     {
       stdout,
       stderr: stdout,
-      async prompt() {
+      async prompt(question) {
+        prompts.push(question)
         return answers.shift()
       },
     },
@@ -1114,10 +1224,14 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.smokeMode, 'delegated-runtime')
   assert.deepEqual(result.skipped, [])
   assert.equal(result.bridgeSetup.executed, false)
-  assert.match(stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.match(stdout.text, /\[5\/5\] Register and smoke test/)
+  assert.match(stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
+  assert.match(stdout.text, /No llmwiki-agent-bridge is reachable at http:\/\/127\.0\.0\.1:8788 yet/)
   assert.match(stdout.text, /Safe start command/)
   assert.match(stdout.text, /no global install/)
+  assert(prompts.some((prompt) => /Set up llmwiki-agent-bridge as one endpoint for the selected source\(s\)\?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL\(s\)\.\n\[y\/N\]: $/.test(prompt)))
+  assert(prompts.some((prompt) => /Start llmwiki-agent-bridge now in the background on http:\/\/127\.0\.0\.1:8788\?\nQuickstart will run the command above detached, write logs under .*\.llmwiki-bridge-start[\\/]logs, then wait for bridge health\.\n\[y\/N\]: $/.test(prompt)))
 })
 
 test('quickstart labels requested hybrid bridge smoke mode as hybrid', async () => {
@@ -2010,6 +2124,23 @@ function captureWritable() {
       return text
     },
   })
+  return stream
+}
+
+function captureTtyWritable() {
+  const stream = captureWritable()
+  Object.defineProperty(stream, 'isTTY', { value: true })
+  stream.columns = 80
+  stream.rows = 24
+  return stream
+}
+
+function ttyReadable() {
+  const stream = new Readable({
+    read() {},
+  })
+  Object.defineProperty(stream, 'isTTY', { value: true })
+  stream.setRawMode = () => stream
   return stream
 }
 

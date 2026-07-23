@@ -26,6 +26,8 @@
   `uv run` for long-running source servers when available.
 - [x] Improve first-run prompt transcript with a concise `llmwiki-*`
   explanation, multiline discovery prompts, and explicit yes/no choice echoes.
+- [x] Make TTY yes/no quickstart prompts complete on `y`/`n` keypress without
+  Enter, add discovery progress feedback, and clarify bridge setup prompts.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

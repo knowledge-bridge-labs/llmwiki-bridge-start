@@ -61,8 +61,8 @@ onboarding harness.
 - Docs now emphasize that `--path DIR` constrains scanning to that directory
   tree, avoiding unrelated home/workspace sibling candidates.
 - Source startup validates selected folders with `llmwiki-serve manifest`.
-- Step 4 is now framed as `Done: optionally add bridge`, making source-only
-  success clear before bridge setup.
+- Step 4 is now framed as `Optional bridge setup`, making the bridge decision
+  explicit after source servers are healthy.
 - Started source servers are marked ready only after `/health` responds.
 - Windows `uv run` startup records the actual listening server PID separately
   from the runner PID when they differ.
@@ -80,6 +80,16 @@ onboarding harness.
   paths for disambiguation, and public screenshots, logs, docs, and issues
   should redact or replace them.
 - Added npm Trusted Publishing workflow skeleton for future OIDC release.
+- Follow-up on 2026-07-24: TTY quickstart yes/no prompts now route through an
+  immediate keypress-capable confirm adapter, so pressing `y` or `n` completes
+  the choice without Enter while still printing the `[choice]` transcript echo.
+- Follow-up on 2026-07-24: discovery now has visible progress after approval:
+  TTY runs get a spinner and non-TTY transcripts get clear start/completion
+  status lines.
+- Follow-up on 2026-07-24: the bridge step now explains what
+  `llmwiki-agent-bridge` adds before asking, makes the setup question about one
+  endpoint for selected sources, and clarifies that the background-start prompt
+  runs the safe command detached, writes logs, and waits for bridge health.
 
 ## Validation
 
@@ -129,6 +139,11 @@ onboarding harness.
   - yes/no prompts now echo explicit and defaulted choices, and the discovery
     prompt separates the question, scan-scope explanation, and `[Y/n]` marker
     onto separate lines
+- Follow-up prompt/progress tests:
+  - TTY yes/no confirm adapter and discovery spinner path covered with mocks
+  - non-TTY discovery progress start/completion transcript covered
+  - bridge setup prompt copy and detached background-start explanation covered
+  - Node test suite passed with 68 tests
 
 ## Commits
 
@@ -142,7 +157,8 @@ onboarding harness.
 - `b8af0d1` — Prefer strong child wiki sources in app vaults
 - `e6ecc3f` — Separate discover inventory from quickstart policy
 - `b73c2c8` — Polish quickstart candidate guidance
-- pending — Polish quickstart first-run transcript
+- `94a6125` — Polish quickstart first-run transcript
+- pending — Add immediate quickstart prompts and progress
 - pending — Improve customer onboarding flow
 
 ## Follow-ups

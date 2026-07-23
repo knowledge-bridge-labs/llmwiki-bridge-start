@@ -124,6 +124,12 @@ source server.
 - Long yes/no prompts must keep the main question and explanatory scope text on
   separate lines, and every yes/no answer must be echoed as an explicit
   transcript choice, including defaulted choices.
+- In TTY interactive quickstart, yes/no prompts must accept a `y` or `n`
+  keypress immediately without requiring Enter. Non-TTY, piped, injected
+  `io.prompt`, and `--yes` flows must keep their text/flag fallbacks.
+- After discovery approval, quickstart must show visible discovery progress:
+  a spinner in TTY terminals and clear start/completion transcript lines in
+  non-TTY output.
 - `quickstart` must keep the default source selection list focused on
   recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
   LLMWiki Markdown roots. Quickstart must explain that Native
@@ -146,6 +152,11 @@ source server.
   optional.
 - After starting selected sources, `quickstart` must state that direct source
   endpoints are healthy and remain usable if the user skips bridge setup.
+- Before asking about bridge setup, `quickstart` must explain what
+  `llmwiki-agent-bridge` adds, when it is useful, and that skipping it still
+  leaves direct MCP Streamable HTTP source URLs ready to use. Bridge setup
+  prompts must describe the installation/start intent explicitly, including
+  what happens when quickstart starts the bridge command in the background.
 - When the user skips bridge setup, `quickstart` must print one generic
   coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`) for every
   started source.
