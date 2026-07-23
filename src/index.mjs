@@ -348,7 +348,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeQuickstartStep(output, ui, 1, QUICKSTART_STEP_TOTAL, 'Discover sources')
     writeStatus(output, ui, 'info', 'Will scan these root folder(s):')
     output.write(formatQuickstartScanRoots(roots))
-    if (!await confirmQuickstart(prompter, 'Auto-discover local LLMWiki/knowledge source folders? Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.', true)) {
+    if (!await confirmQuickstart(prompter, formatQuickstartDiscoveryPrompt(options), true)) {
       writeStatus(output, ui, 'skip', 'Skipped discovery.')
       output.write('Run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
       result.skipped.push('discovery', 'selection', 'start', 'bridge-setup', 'register', 'smoke')
@@ -390,6 +390,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} advanced/lower-priority candidate(s) hidden by default${reasonText ? ` (${reasonText})` : ''}. Use --include-additional to review app vaults, examples, demos, starter/e2e sources, and generic Markdown candidates.`)
     }
     output.write(formatQuickstartCandidateGroups(candidatePlan.groups))
+    writePathRedactionNotice(output, ui)
 
     const selected = await prompter.selectCandidates(candidatePlan.visibleCandidates)
     result.selected = selected.map(summarizeCandidateForFlow)
@@ -437,7 +438,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'info', 'You can use these source URLs directly from local tools.')
     output.write('Add llmwiki-agent-bridge when you want source fan-out, A2A/MCP endpoints, runtime synthesis, or one normalized bridge artifact.\n')
 
-    writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Optional bridge setup')
+    writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Done: optionally add bridge')
     if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the local source URLs above are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source URL(s).')
       output.write(formatStartedSourceUrls(result.started.sources))
@@ -600,6 +601,14 @@ function formatStartedSourceUrls(sources = []) {
   return `Local Knowledge Source URLs:\n${sources.map((source) => `  - ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
 }
 
+function writePathRedactionNotice(output, ui) {
+  writeStatus(output, ui, 'info', pathRedactionNoticeText())
+}
+
+function pathRedactionNoticeText() {
+  return 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'
+}
+
 function formatQuickstartScanRoots(roots = []) {
   if (!roots.length) {
     return '  - <none>\n'
@@ -759,14 +768,20 @@ function formatQuickstartCandidateGroups(groups = []) {
     return 'No LLMWiki candidates found.\n'
   }
   const renderedGroups = groups.map((group) => `${group.title}:\n${formatQuickstartCandidateRows(group.candidates)}`)
-  return `${renderedGroups.join('\n')}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+  return `${renderedGroups.join('\n')}\n  ${formatQuickstartSelectAllLine(groups.some((group) => group.kind === 'additional'))}\n  q) cancel\n`
 }
 
 function formatQuickstartCandidates(candidates) {
   if (!candidates.length) {
     return 'No LLMWiki candidates found.\n'
   }
-  return `${formatQuickstartCandidateRows(candidates)}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+  return `${formatQuickstartCandidateRows(candidates)}\n  ${formatQuickstartSelectAllLine(candidates.some((candidate) => candidate.quickstartGroup === 'additional'))}\n  q) cancel\n`
+}
+
+function formatQuickstartSelectAllLine(hasVisibleAdvancedCandidates) {
+  return hasVisibleAdvancedCandidates
+    ? 'all) select all listed candidates (advanced)'
+    : 'all) select all listed candidates'
 }
 
 function formatQuickstartCandidateRows(candidates) {
@@ -1195,6 +1210,16 @@ function discoverRootsFromOptions(options) {
     return [join(homedir(), 'workspace')]
   }
   return [homedir()]
+}
+
+function formatQuickstartDiscoveryPrompt(options = {}) {
+  const constrained = arrayOption(options.path).length > 0
+    || boolOption(options.cwd)
+    || boolOption(options.workspace)
+  const scopeText = constrained
+    ? 'Discovery is constrained to the root(s) shown above.'
+    : 'Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.'
+  return `Auto-discover local LLMWiki/knowledge source folders? ${scopeText}`
 }
 
 export async function discoverCandidates({
@@ -2770,7 +2795,7 @@ function formatCandidates(candidates) {
     confidence: ${candidate.confidence} (${candidate.score})
     pages: ${pageText}
     signals: ${candidate.signals.join(', ')}${adapter}${startable}`
-  }).join('\n\n')}\n`
+  }).join('\n\n')}\n\nNote: ${pathRedactionNoticeText()}\n`
 }
 
 function helpText() {

@@ -4,8 +4,8 @@
 
 AX users often already have one or more local knowledge artifacts, but they need
 a low-friction way to find usable LLMWiki-compatible folders, start
-`llmwiki-serve`, connect sources to `llmwiki-agent-bridge`, and verify that a
-coding-agent client can retrieve evidence.
+`llmwiki-serve`, obtain a local source URL, and optionally connect sources to
+`llmwiki-agent-bridge` when they need bridge orchestration.
 
 ## Goals
 
@@ -23,11 +23,14 @@ coding-agent client can retrieve evidence.
 - Start selected local sources on loopback ports.
 - Treat started `llmwiki-serve` source URLs as immediately useful even when the
   user skips `llmwiki-agent-bridge`.
+- Define first onboarding success as a reachable local source URL; bridge
+  setup, bridge registration, and bridge smoke checks are optional next steps.
 - Make `llmwiki-agent-bridge` setup optional and explicit.
-- Upsert sources into an existing bridge registry without deleting unrelated
-  sources.
-- Run an A2A-style smoke query against the bridge, using delegated-runtime when
-  an explicit LLM endpoint is configured and evidence-only otherwise.
+- Optionally upsert sources into an existing bridge registry without deleting
+  unrelated sources.
+- Optionally run an A2A-style smoke query against the bridge, using
+  delegated-runtime when an explicit LLM endpoint is configured and
+  evidence-only otherwise.
 
 ## Non-goals
 
@@ -55,7 +58,7 @@ parent of a stronger child `wiki/` source.
 | --- | --- | --- |
 | Native LLMWiki/OpenWiki projection | `.wiki-compiler.json`; sidecar graph or projection metadata such as `graph/graph.json`; or structural projection combinations that include stronger projection frontmatter such as `source_refs` or `sources`, `hot.md` with `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `review_state` alone, `wiki_title` alone, `hot.md` plus index/overview alone, and docs-like hub plus typed folders must not classify a folder as Native. | Medium to high; high when multiple projection markers combine. |
 | LLMWiki Markdown | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus typed folders and either a strong hub pair (`hot.md` with `index.md` or `overview.md`) or a hub file with a larger Markdown set. This is distinct from a compiled Native projection. | Medium to high; validation determines whether `llmwiki-serve` can start it. |
-| Obsidian vault | `.obsidian/` plus Markdown notes. Strong direct child `wiki/` sources do not remove the vault root from `discover`; both paths remain visible when both meet the score threshold. Default quickstart recommends the child `wiki/` source and treats the parent app vault as additional. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation. |
+| Obsidian vault | `.obsidian/` plus Markdown notes. Strong direct child `wiki/` sources do not remove the vault root from `discover`; both paths remain visible when both meet the score threshold. Default quickstart recommends the child `wiki/` source and treats the parent app vault as advanced/lower-priority. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation. |
 | Logseq graph | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | `dendron.yml`. | Medium. |
 | Foam workspace | `.foam/`, or the weaker fallback of a VS Code extension recommendation containing Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |
@@ -75,6 +78,9 @@ source server.
   guided TTY quickstart may use a small prompt library for multi-select UX, but
   non-TTY, piped, and `--yes` flows must continue to use text/flag fallbacks.
 - `discover` must be safe enough to run from a home directory by default.
+- `--path DIR` must constrain discovery to the selected directory tree instead
+  of scanning the current user's home directory, workspace siblings, or
+  unrelated local projects.
 - `discover` output must expose the score, confidence, and marker signals that
   caused each candidate to appear.
 - `discover` must report every candidate that meets the selected score
@@ -100,6 +106,12 @@ source server.
 - Invoking `llmwiki-bridge-start` without a subcommand must start the
   quickstart flow; explicit `quickstart` remains equivalent and explicit
   `discover` remains available for scriptable candidate listing.
+- Public quickstart documentation must lead with recommended first-run
+  invocations only: `npx llmwiki-bridge-start@latest --path ./wiki`,
+  `npx llmwiki-bridge-start@latest --workspace`, and bare
+  `npx llmwiki-bridge-start@latest`. `discover`, `start`, `register`, and
+  `smoke` examples belong in an advanced/scriptable commands section so first
+  users do not read them as a mandatory sequence.
 - `quickstart` must ask before discovery and make the default home-directory
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
 - `quickstart` must keep the default source selection list focused on
@@ -119,6 +131,9 @@ source server.
 - `quickstart` must support TTY checkbox-style multi-select source startup,
   preserve comma-separated text selection for non-TTY/automation, and allow a
   successful direct-source-only exit before bridge setup.
+- `quickstart` must explain near the start that a printed, healthy local source
+  URL is the minimum successful onboarding outcome and that bridge setup is
+  optional.
 - `start`/`quickstart` must not report a launched source as ready until its
   loopback HTTP health endpoint responds within a bounded timeout.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user
@@ -127,10 +142,10 @@ source server.
   source-start defaults, select the first candidate, and skip optional bridge
   setup unless `--setup-bridge` is also supplied.
 - Source URLs with credentials or unsupported schemes must be rejected.
-- Public screenshots, docs, and issue-report examples must redact full local
-  paths even though the CLI itself prints full paths for local source
-  disambiguation.
+- The CLI must print full local paths for local source disambiguation and warn
+  users to redact or replace them before publishing screenshots, logs, docs, or
+  issue reports.
 - Tests must cover scoring, discover parent/child overlap transparency,
-  quickstart recommended/additional presentation, supported-variant markers,
+  quickstart recommended/advanced presentation, supported-variant markers,
   default generic fallback behavior, manifest validation behavior where
   practical, and registry merge safety.

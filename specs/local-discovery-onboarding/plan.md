@@ -16,8 +16,9 @@
    sources.
 7. Register sources through the bridge settings endpoint with merge/upsert
    semantics.
-8. Add a guided quickstart flow that can stop after direct source startup or
-   continue into optional bridge setup.
+8. Add a guided quickstart flow that leads with `--path DIR`, `--workspace`, or
+   bare invocation, can stop after direct source startup, and can continue into
+   optional bridge setup.
    - Use a TTY-only checkbox multi-select for candidate source selection.
    - Keep the comma-separated numbered fallback for non-TTY, piped, injected
      prompt, and `--yes` runs.
@@ -27,8 +28,10 @@
      advanced/lower-priority.
    - Label non-recommended candidates as advanced/lower-priority and explain
      the Native LLMWiki/OpenWiki vs LLMWiki Markdown distinction inline.
-9. Add a bridge smoke command that uses evidence-only mode by default and
-   delegated-runtime when an explicit LLM endpoint is configured.
+   - Treat a healthy printed local source URL as the minimum successful
+     onboarding outcome.
+9. Add an optional bridge smoke command that uses evidence-only mode by default
+   and delegated-runtime when an explicit LLM endpoint is configured.
 10. Verify with unit tests, package dry-run, targeted local discovery, and a
    local source restart smoke.
 
@@ -40,6 +43,9 @@
   categories to decide broad `discover` output for inspected directories.
   Generic matches that meet the selected threshold stay visible in `discover`
   and are handled as advanced/lower-priority candidates by quickstart.
+- First-run users can over-scan local machines if the first docs example is
+  broad; lead with `--path DIR` for known source folders and document that it
+  constrains scanning to that directory tree.
 - App-style vault roots and nested `wiki/` projections can duplicate each other;
   keep both visible in scriptable `discover` when both meet the score threshold.
   In default quickstart, recommend a strong child `wiki/` source and place the
@@ -74,8 +80,13 @@
   LLMWiki/OpenWiki and LLMWiki Markdown, while app vaults, graphs, workspaces,
   generic Markdown folders, and noisy paths are advanced/lower-priority and
   visible through `--include-additional`.
-- Public docs and screenshots must redact local filesystem paths even though
-  the CLI prints full paths for local disambiguation.
+- Quickstart docs must define a printed healthy local source URL as the minimum
+  successful onboarding outcome, with bridge setup clearly optional.
+- README Quick Start must move `discover`, `start`, `register`, and `smoke`
+  examples into an advanced/scriptable commands section so they are not read as
+  a mandatory first-run sequence.
+- Public docs and screenshots must redact or replace local filesystem paths
+  even though the CLI prints full paths for local disambiguation.
 - Native classification docs must say that `review_state` or `wiki_title`
   alone are insufficient; stronger projection evidence such as
   `.wiki-compiler.json`, sidecar graph/projection metadata, or

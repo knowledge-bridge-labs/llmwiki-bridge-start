@@ -15,6 +15,10 @@ source-like wiki served through the Markdown adapter. App vaults, graphs,
 workspaces, generic Markdown folders, and noisy example/demo/starter/e2e paths
 are advanced/lower-priority candidates and visible with `--include-additional`.
 
+For first-run onboarding, prefer `--path DIR` when you already know the source
+folder. That constrains discovery to the selected directory tree instead of
+scanning the current user's home directory or unrelated workspace siblings.
+
 ## Variants
 
 | Variant | Intended use | Detection markers | Default confidence |
@@ -57,9 +61,12 @@ sections; pass `--include-additional` to make the advanced section selectable.
 Traversal may still avoid infrastructure folders that are not useful source
 roots, such as dependency, cache, build, transient editor/download, and OS
 folders. That safety guard is separate from noisy-path presentation filtering.
+When `--path DIR` is supplied, traversal is constrained to that directory tree;
+use it for targeted validation and for normally skipped areas that you
+intentionally want to inspect.
 
-Quickstart prints full local paths by design. Redact those paths before
-publishing screenshots, logs, docs, or issue reports.
+The CLI prints full local paths for disambiguation by design. Redact or replace
+those paths before publishing screenshots, logs, docs, or issue reports.
 
 ## Non-goals
 

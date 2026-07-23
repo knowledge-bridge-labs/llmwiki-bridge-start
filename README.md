@@ -10,15 +10,27 @@ sources with a local bridge when requested, and runs bridge smoke checks.
 
 ## Quick Start
 
+Recommended first run:
+
 ```bash
-npx llmwiki-bridge-start@latest
+npx llmwiki-bridge-start@latest --path ./wiki
 npx llmwiki-bridge-start@latest --workspace
-npx llmwiki-bridge-start@latest discover --home
-npx llmwiki-bridge-start@latest discover --path . --validate
-npx llmwiki-bridge-start@latest start --path .llmwiki-work/knowledge-bridge-labs-wiki --port 11001
-npx llmwiki-bridge-start@latest register --bridge http://127.0.0.1:8788 --config .llmwiki-bridge-start/sources.json
-npx llmwiki-bridge-start@latest smoke --bridge http://127.0.0.1:8788
+npx llmwiki-bridge-start@latest
 ```
+
+Use `--path ./wiki` when you already know the source folder. The scan is
+constrained to that directory tree, so quickstart does not wander into your
+home directory, workspace siblings, or unrelated local projects. Use
+`--workspace` when you want quickstart to look under your `~/workspace`
+directory. Use
+the bare command when you want the guided flow to propose a broader scan; it
+asks before scanning the current user's home directory.
+
+Minimum success: when quickstart starts `llmwiki-serve` and prints a loopback
+local source URL, first onboarding has succeeded. You can give that URL directly
+to a local agent or script. `llmwiki-agent-bridge` is optional; add it only when
+you want source fan-out, A2A/MCP surfaces, runtime-backed synthesis, or one
+normalized bridge artifact.
 
 If `llmwiki-serve` is not on `PATH`, point the harness at a local checkout or
 environment explicitly, for example:
@@ -64,7 +76,7 @@ before selection and asks you to rerun with `--include-additional`.
 The scriptable `discover` command is inventory, not presentation. Within the
 directories it scans, it reports every candidate that meets its score threshold,
 including parent/child overlaps and app vault roots that also contain a strong
-child `wiki/` source. Noisy-path and additional-candidate filtering is a
+child `wiki/` source. Noisy-path and advanced/lower-priority filtering is a
 quickstart UX policy, not a broad-discover hiding rule.
 
 `--yes` is intended for local smoke automation: it accepts discovery and source
@@ -83,9 +95,22 @@ dependency, cache, build, transient editor/download, and other infrastructure
 folders; pass an explicit `--path DIR` when you intentionally want to inspect a
 normally skipped area.
 
-Quickstart intentionally prints full local paths so users can distinguish
-candidate folders before starting servers. Redact or replace those paths before
-publishing screenshots, logs, docs, or issue reports.
+Quickstart intentionally prints full local paths for disambiguation so users can
+distinguish candidate folders before starting servers. Redact or replace those
+paths before publishing screenshots, logs, docs, or issue reports.
+
+### Advanced/scriptable commands
+
+Use these when you want to automate or debug individual steps. They are not a
+required first-run sequence.
+
+```bash
+npx llmwiki-bridge-start@latest discover --home
+npx llmwiki-bridge-start@latest discover --path . --validate
+npx llmwiki-bridge-start@latest start --path ./wiki --port 11001
+npx llmwiki-bridge-start@latest register --bridge http://127.0.0.1:8788 --config .llmwiki-bridge-start/sources.json
+npx llmwiki-bridge-start@latest smoke --bridge http://127.0.0.1:8788
+```
 
 ## Supported Source Variants
 
@@ -97,7 +122,7 @@ looks like a candidate; `--validate` is the compatibility check that asks
 | --- | --- | --- | --- |
 | Native LLMWiki/OpenWiki projection | An already-built projection intended to be served by `llmwiki-serve`. | `.wiki-compiler.json`; sidecar graph or projection metadata such as `graph/graph.json`; or structural projection combinations that include stronger projection frontmatter such as `source_refs` or `sources`, `hot.md` plus `index.md` or `overview.md`, and typed folders such as `concepts/`, `entities/`, `sources/`, or `queries/`. Frontmatter alone, `review_state` alone, `wiki_title` alone, `hot.md` alone, and docs-like hub plus typed folders are not enough to classify Native. | Usually medium to high; high when multiple projection markers are present. |
 | LLMWiki Markdown | A source-like Markdown wiki root that `llmwiki-serve` can often read with its Markdown adapter, but that is not a compiled Native projection. | Source-like root names such as `wiki`, `llmwiki`, `openwiki`, or `vault`, plus typed folders and either a strong hub pair (`hot.md` plus `index.md`/`overview.md`) or a hub file with a larger Markdown set. | Usually medium to high; validate before treating it as startable. |
-| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a strong direct child `wiki/` source, `discover` keeps both the vault root and child visible when both meet the score threshold. Default quickstart presents the child as recommended and the parent app vault as additional. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation; higher only if projection markers are also present. |
+| Obsidian vault | A plain-file Obsidian vault that may be usable directly or through a future adapter. | `.obsidian/` plus Markdown notes. If the vault has a strong direct child `wiki/` source, `discover` keeps both the vault root and child visible when both meet the score threshold. Default quickstart presents the child as recommended and the parent app vault as advanced/lower-priority. App markers keep the app variant label unless stronger projection evidence such as `.wiki-compiler.json`, sidecar graph metadata, or `source_refs` marks a compiled projection. | Medium before validation; higher only if projection markers are also present. |
 | Logseq graph | A Logseq knowledge graph. | `logseq/config.edn`, or the weaker fallback of both `pages/` and `journals/`. | Medium for `logseq/config.edn`; low for `pages/` plus `journals/` unless other source-like hints are present. |
 | Dendron workspace | A Dendron workspace or vault root. | `dendron.yml`. | Medium. |
 | Foam workspace | A Foam Markdown workspace. | `.foam/`, or the weaker fallback of a VS Code extensions recommendation that mentions Foam. | Medium for `.foam/`; low for the VS Code hint unless other source-like hints are present. |

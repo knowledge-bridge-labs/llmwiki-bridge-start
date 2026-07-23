@@ -10,6 +10,12 @@ onboarding harness.
 ## Implemented
 
 - Bare `llmwiki-bridge-start` now starts the guided quickstart flow.
+- README Quick Start now leads with recommended first-run invocations:
+  `--path ./wiki`, `--workspace`, and bare `npx`, while scriptable
+  `discover`/`start`/`register`/`smoke` examples live in an
+  advanced/scriptable section.
+- Quick Start now defines the minimum successful onboarding outcome as a
+  printed, healthy local source URL; bridge setup remains optional.
 - Interactive terminals use checkbox-style multi-select for source selection.
 - Piped, non-interactive, and `--yes` runs keep text/flag fallbacks.
 - Candidate source paths are printed in full so users can identify the correct
@@ -26,11 +32,11 @@ onboarding harness.
   plus index/overview alone no longer classify as Native unless graph,
   compiler, or projection metadata is present.
 - Quickstart now keeps default source selection focused on recommended LLMWiki
-  sources only. Compatible app vaults and noisy example/demo/starter/e2e
-  candidates require `--include-additional`.
+  sources only. Advanced/lower-priority app vaults and noisy
+  example/demo/starter/e2e candidates require `--include-additional`.
 - Discovery is now treated as broad scriptable inventory for inspected
   directories. Parent/child overlaps stay visible when both candidates meet the
-  score threshold; quickstart owns the recommended/additional presentation
+  score threshold; quickstart owns the recommended/advanced presentation
   policy.
 - Quickstart now annotates hidden/additional candidates with reason categories:
   app vault, noisy path, or generic Markdown.
@@ -48,23 +54,32 @@ onboarding harness.
   below the default discovery threshold.
 - Noisy-path quickstart matching is token-based, so substring-only names do not
   get hidden accidentally.
-- The non-interactive `all` selector is labeled as advanced to reduce accidental
-  broad source startup.
+- The non-interactive `all` selector is labeled as advanced only when
+  advanced/lower-priority candidates are visible.
 - Discovery asks before scanning the current user's home directory and explains
   how to constrain scope with `--path`, `--workspace`, or `--cwd`.
+- Docs now emphasize that `--path DIR` constrains scanning to that directory
+  tree, avoiding unrelated home/workspace sibling candidates.
 - Source startup validates selected folders with `llmwiki-serve manifest`.
+- Step 4 is now framed as `Done: optionally add bridge`, making source-only
+  success clear before bridge setup.
 - Started source servers are marked ready only after `/health` responds.
 - Windows `uv run` startup records the actual listening server PID separately
   from the runner PID when they differ.
 - Optional `llmwiki-agent-bridge` setup remains explicit; direct source URLs are
   a successful quickstart outcome.
+- Specs now keep the public-safety criterion that the CLI prints full local
+  paths for disambiguation, and public screenshots, logs, docs, and issues
+  should redact or replace them.
 - Added npm Trusted Publishing workflow skeleton for future OIDC release.
 
 ## Validation
 
+- Docs-only onboarding update:
+  - `git diff --check` passed; Git emitted CRLF normalization warnings only.
 - `npm run check`
   - syntax checks passed
-  - Node test suite passed with 62 tests
+  - Node test suite passed with 63 tests
   - package dry-run passed
 - Quickstart smoke:
   - bare `llmwiki-bridge-start` with `n` prints the concrete scan root and exits
@@ -112,7 +127,9 @@ onboarding harness.
 - `0536275` — Tighten quickstart source variant detection
 - `0f7e3e5` — Focus quickstart default candidate selection
 - `b8af0d1` — Prefer strong child wiki sources in app vaults
-- pending — Separate discover inventory from quickstart presentation policy
+- `e6ecc3f` — Separate discover inventory from quickstart policy
+- `b73c2c8` — Polish quickstart candidate guidance
+- pending — Improve customer onboarding flow
 
 ## Follow-ups
 

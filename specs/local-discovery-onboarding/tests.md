@@ -29,6 +29,8 @@
 - `.llmwiki-work` internal `input/`, `sources/`, and e2e traversal filtering.
 - Fast discovery prefiltering through an injected scanner so tests do not
   depend on local OS tool availability.
+- `--path DIR` discovery/quickstart scope stays constrained to that directory
+  tree and does not include sibling workspace or home-directory candidates.
 - JavaScript fallback scanner inclusion of marker-shaped roots and exclusion of
   dependency/cache/build/generated infrastructure folders.
 - `discover` reports parent/child overlap when both paths meet the score
@@ -58,8 +60,13 @@
 - CLI dispatch paths: `llmwiki-bridge-start` starts quickstart by default,
   explicit `quickstart` remains equivalent, and explicit `discover` remains the
   scriptable listing command.
+- README/CLI quickstart copy leads with recommended first-run forms
+  (`--path ./wiki`, `--workspace`, or bare invocation) and keeps
+  `discover`/`start`/`register`/`smoke` examples in advanced/scriptable docs.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
+- Quickstart success copy treats a healthy printed local source URL as the
+  minimum onboarding success and describes bridge setup as optional.
 - Quickstart default source selection hides advanced/lower-priority
   app/generic/noisy
   candidates, keeps `all` scoped to the currently listed candidates, and
@@ -82,6 +89,9 @@
   non-interactive automation avoids unbounded waiting.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
+- CLI output may include full local paths for candidate disambiguation but must
+  warn users to redact or replace them before publishing screenshots, logs,
+  docs, or issue reports.
 - LLM endpoint detection for delegated-runtime bridge smoke; evidence-only when
   no explicit endpoint is configured.
 - Bridge registry upsert by URL.
@@ -93,6 +103,8 @@
 
 - Run `doctor` against a local bridge.
 - Run targeted `discover --validate` against representative local source roots.
+- Run targeted `discover --path <source-root> --validate` and confirm unrelated
+  local candidate siblings are not scanned or displayed.
 - Start multiple local sources on loopback ports.
 - Verify `/health` and `/manifest` for started sources.
 - Run bridge smoke using the existing bridge registry, evidence-only by default

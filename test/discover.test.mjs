@@ -61,6 +61,27 @@ test('runCli keeps explicit quickstart available', async () => {
   assert.match(prompts[0].question, /current user's home/)
 })
 
+test('quickstart discovery prompt explains constrained roots without the home-scan warning', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-constrained-quickstart-'))
+  const stdout = captureWritable()
+  const prompts = []
+
+  await runCli(['quickstart', '--path', root], {
+    stdout,
+    stderr: stdout,
+    async prompt(question, fallback) {
+      prompts.push({ question, fallback })
+      return 'n'
+    },
+  })
+
+  assert(stdout.text.includes('[info] Will scan these root folder(s):'))
+  assert(stdout.text.includes(root))
+  assert.equal(prompts.length, 1)
+  assert.match(prompts[0].question, /Discovery is constrained to the root\(s\) shown above/)
+  assert.doesNotMatch(prompts[0].question, /current user's home/)
+})
+
 test('quickstart reprompts invalid yes/no answers in interactive prompt fallback', async () => {
   const stdout = captureWritable()
   const answers = ['maybe', 'n']
@@ -128,6 +149,7 @@ test('runCli discover keeps detailed candidate format', async () => {
   assert.match(stdout.text, /variant: Native LLMWiki\/OpenWiki/)
   assert.match(stdout.text, /pages:/)
   assert.match(stdout.text, /signals:/)
+  assert.match(stdout.text, /Note: Full local paths are shown for disambiguation; redact them before sharing CLI output\./)
   assert.doesNotMatch(stdout.text, /all\) start all listed candidates/)
 })
 
@@ -327,10 +349,13 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.match(io.stdout.text, /Recommended source types: Native LLMWiki\/OpenWiki is a compiled projection; LLMWiki Markdown is a source-like wiki served by the Markdown adapter\./)
   assert.match(io.stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert.match(io.stdout.text, /  2\) second-wiki \[Obsidian vault\] \(high\/70, 10 md\)/)
+  assert.match(io.stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
   assert.match(io.stdout.text, /source URLs directly/)
+  assert.match(io.stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.equal(countOccurrences(io.stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
 })
 
 test('quickstart hides additional candidates by default and selects only recommended sources', async () => {
@@ -400,9 +425,12 @@ test('quickstart hides additional candidates by default and selects only recomme
   assert.match(stdout.text, /3 advanced\/lower-priority candidate\(s\) hidden by default \(1 app vault, 1 example\/demo\/starter\/e2e-like path, 1 generic Markdown\)/)
   assert.match(stdout.text, /recommended-native \[Native LLMWiki\/OpenWiki\]/)
   assert.match(stdout.text, /wiki \[LLMWiki Markdown\]/)
+  assert.match(stdout.text, /\n  all\) select all listed candidates\n/)
+  assert.doesNotMatch(stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
   assert.doesNotMatch(stdout.text, /hidden-obsidian \[Obsidian vault\]/)
   assert.doesNotMatch(stdout.text, /starter-e2e-wiki/)
   assert.doesNotMatch(stdout.text, /generic-notes/)
+  assert.equal(countOccurrences(stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
 })
 
 test('quickstart recommends strong child wiki while keeping parent app vault additional', async () => {
@@ -466,6 +494,7 @@ test('quickstart recommends strong child wiki while keeping parent app vault add
   assert.match(includeStdout.text, /Advanced \/ lower-priority candidates:/)
   assert.match(includeStdout.text, /obsidian-vault \[Obsidian vault\]/)
   assert.match(includeStdout.text, /reason: app vault/)
+  assert.match(includeStdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
 })
 
 test('quickstart include-additional can start an explicitly selected additional candidate', async () => {
@@ -523,6 +552,7 @@ test('quickstart include-additional can start an explicitly selected additional 
   assert.match(stdout.text, /Advanced \/ lower-priority candidates:/)
   assert.match(stdout.text, /generic-notes \[Generic Markdown\]/)
   assert.match(stdout.text, /reason: generic Markdown/)
+  assert.match(stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
 })
 
 test('quickstart noisy path policy matches path tokens without substring false positives', async () => {
@@ -636,6 +666,7 @@ test('quickstart include-additional shows advanced candidates when no recommende
   assert.match(stdout.text, /Found 1 advanced\/lower-priority candidate source folder\(s\)/)
   assert.match(stdout.text, /Advanced \/ lower-priority candidates:/)
   assert.match(stdout.text, /only-obsidian \[Obsidian vault\]/)
+  assert.match(stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
   assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
 
@@ -689,6 +720,9 @@ test('quickstart non-TTY text fallback fails invalid candidate input without rep
   assert.match(stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert(stdout.text.includes(longPath))
   assert(!stdout.text.includes(`${longPath.slice(0, 93)}...`))
+  assert.match(stdout.text, /\n  all\) select all listed candidates\n/)
+  assert.doesNotMatch(stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
+  assert.equal(countOccurrences(stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
   assert.doesNotMatch(stdout.text, /Enter candidate ranks/)
 })
 
@@ -806,7 +840,8 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert(stdout.text.includes(secondPath))
   assert(!stdout.text.includes(`${firstPath.slice(0, 93)}...`))
   assert(!stdout.text.includes(`${secondPath.slice(0, 93)}...`))
-  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
+  assert.match(stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.equal(countOccurrences(stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
 })
 
@@ -867,6 +902,8 @@ test('quickstart TTY multiselect receives only recommended candidates by default
   assert.deepEqual(multiselectCall[1].options.map((option) => option.value), [1])
   assert.equal(multiselectCall[1].options[0].label, '1) recommended-native [Native LLMWiki/OpenWiki]')
   assert(!stdout.text.includes('hidden-obsidian [Obsidian vault]'))
+  assert.match(stdout.text, /\n  all\) select all listed candidates\n/)
+  assert.doesNotMatch(stdout.text, /\n  all\) select all listed candidates \(advanced\)\n/)
   assert.equal(result.candidateSelection.hiddenAdditionalCount, 1)
   assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
@@ -946,7 +983,7 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.smokeMode, 'delegated-runtime')
   assert.deepEqual(result.skipped, [])
   assert.equal(result.bridgeSetup.executed, false)
-  assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
+  assert.match(stdout.text, /\[4\/5\] Done: optionally add bridge/)
   assert.match(stdout.text, /\[5\/5\] Register and smoke test/)
   assert.match(stdout.text, /Safe start command/)
   assert.match(stdout.text, /no global install/)
@@ -1933,4 +1970,8 @@ function killPid(pid) {
   } catch {
     // Best-effort cleanup for tests.
   }
+}
+
+function countOccurrences(text, needle) {
+  return String(text).split(needle).length - 1
 }
