@@ -1043,7 +1043,7 @@ test('discoverCandidates hides llmwiki-work internal input and sources folders',
   assert(!result.candidates.some((candidate) => candidate.path === sources))
 })
 
-test('discoverCandidates prefers Obsidian vault root over direct child wiki', async () => {
+test('discoverCandidates prefers strong direct child wiki source over Obsidian vault root', async () => {
   const root = mkdtempSync(join(tmpdir(), 'llmwiki-obsidian-'))
   const wiki = join(root, 'wiki')
   mkdirSync(join(root, '.obsidian'), { recursive: true })
@@ -1052,6 +1052,20 @@ test('discoverCandidates prefers Obsidian vault root over direct child wiki', as
   writeFileSync(join(wiki, 'index.md'), '---\nreview_state: approved\nsource_refs: [SRC]\n---\n# Index\n')
   writeFileSync(join(wiki, 'hot.md'), '# Hot\n')
   writeFileSync(join(wiki, 'concepts', 'topic.md'), '# Topic\n')
+
+  const result = await discoverCandidates({ roots: [root], maxDepth: 3, validate: false })
+  assert(!result.candidates.some((candidate) => candidate.path === root))
+  assert(result.candidates.some((candidate) => candidate.path === wiki))
+  assert.equal(result.candidates.find((candidate) => candidate.path === wiki).variant, 'native-llmwiki-openwiki')
+})
+
+test('discoverCandidates keeps Obsidian vault root over weak direct child wiki', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-obsidian-weak-child-'))
+  const wiki = join(root, 'wiki')
+  mkdirSync(join(root, '.obsidian'), { recursive: true })
+  mkdirSync(wiki, { recursive: true })
+  writeFileSync(join(root, 'root-note.md'), '# Root Note\n')
+  writeFileSync(join(wiki, 'index.md'), '# Weak child index\n')
 
   const result = await discoverCandidates({ roots: [root], maxDepth: 3, validate: false })
   assert(result.candidates.some((candidate) => candidate.path === root))

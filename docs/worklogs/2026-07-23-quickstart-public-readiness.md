@@ -30,6 +30,8 @@ onboarding harness.
   candidates require `--include-additional`.
 - `all` in quickstart now means all currently listed candidates, not every
   discovered candidate hidden by the quickstart display policy.
+- Discovery now prefers strong direct child `wiki/` sources inside app vaults
+  over the parent app vault, while weak child `wiki/` folders remain suppressed.
 - The non-interactive `all` selector is labeled as advanced to reduce accidental
   broad source startup.
 - Discovery asks before scanning the current user's home directory and explains
@@ -73,6 +75,10 @@ onboarding harness.
     additional compatible candidates
   - `--include-additional` shows all 9 candidates split into Recommended and
     Additional sections
+  - after app-vault child `wiki/` preference, default home quickstart shows 5
+    recommended source folders and hides 4 additional compatible candidates
+  - a targeted project scan with multiple local `wiki/` folders shows the two
+    strong source-like `wiki/` roots as recommended candidates
   - a local source-like Markdown wiki is detected as `LLMWiki Markdown` and
     validates startable through `llmwiki-serve manifest`
   - a local docs-like folder is hidden at the default threshold
@@ -85,7 +91,8 @@ onboarding harness.
 - `1b54e90` — Show full quickstart candidate paths
 - `335098e` — Clarify quickstart source selection
 - `0536275` — Tighten quickstart source variant detection
-- pending — Focus quickstart default candidate selection
+- `0f7e3e5` — Focus quickstart default candidate selection
+- pending — Prefer strong child wiki sources in app vaults
 
 ## Follow-ups
 

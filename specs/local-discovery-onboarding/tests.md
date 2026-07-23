@@ -27,7 +27,9 @@
   depend on local OS tool availability.
 - JavaScript fallback scanner inclusion of marker-shaped roots and exclusion of
   generated/dependency folders.
-- App-root preference over direct child `wiki/`.
+- App-root/direct child `wiki/` duplicate handling: strong direct child `wiki/`
+  sources are preferred over Obsidian vault roots, while weak child `wiki/`
+  folders remain suppressed in favor of the app root.
 - Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
   Quartz source variants at the default discovery threshold, including exact
   variant IDs and user-facing labels.

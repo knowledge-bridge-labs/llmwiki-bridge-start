@@ -1647,16 +1647,18 @@ function addOrUpdateCandidate(map, candidate) {
 
 function removeDuplicateParents(candidates) {
   return candidates.filter((candidate) => {
-    const childWiki = candidates.find((other) => (
+    const directChildWiki = candidates.find((other) => (
       other.path !== candidate.path
       && dirname(other.path) === candidate.path
       && basename(other.path).toLowerCase() === 'wiki'
-      && other.score >= candidate.score
     ))
-    if (!childWiki) {
+    if (!directChildWiki) {
       return true
     }
-    return candidate.signals.some((signal) => signal.startsWith('obsidian') || signal.startsWith('dendron') || signal.startsWith('logseq') || signal.startsWith('quartz') || signal.startsWith('foam'))
+    if (isAppRootSignal(candidate)) {
+      return !isPreferredDirectWikiSource(directChildWiki)
+    }
+    return directChildWiki.score < candidate.score
   })
 }
 
@@ -1669,7 +1671,7 @@ function removeDescendantCandidates(candidates) {
       && isAppRootSignal(other)
     ))
     if (directAppRootParent) {
-      return false
+      return isPreferredDirectWikiSource(candidate)
     }
     return !candidates.some((other) => (
       other.path !== candidate.path
@@ -1695,6 +1697,15 @@ function isSourceRootSignal(candidate) {
     || signal.startsWith('foam')
     || signal.startsWith('quartz')
   ))
+}
+
+function isPreferredDirectWikiSource(candidate = {}) {
+  return (
+    basename(candidate.path || '').toLowerCase() === 'wiki'
+    && candidate.score >= DEFAULT_MIN_SCORE
+    && QUICKSTART_RECOMMENDED_VARIANTS.has(candidateVariant(candidate))
+    && !hasQuickstartNoisyPathHint(candidate.path)
+  )
 }
 
 function isAppRootSignal(candidate) {
