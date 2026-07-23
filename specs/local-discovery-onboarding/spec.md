@@ -21,8 +21,12 @@ a low-friction way to find usable LLMWiki-compatible folders, start
   noisy paths.
 - Validate candidates through `llmwiki-serve manifest` when requested.
 - Start selected local sources on loopback ports.
-- Treat started `llmwiki-serve` source URLs as immediately useful even when the
-  user skips `llmwiki-agent-bridge`.
+- Treat started `llmwiki-serve` source endpoints as immediately useful even
+  when the user skips `llmwiki-agent-bridge`.
+- When completing without `llmwiki-agent-bridge`, print a coding-agent
+  registration handoff for each started source that lists the source URL,
+  health URL, manifest URL, MCP JSON-RPC URL (`/mcp`), and MCP Streamable HTTP
+  URL (`/mcp/stream`) without claiming a specific client config syntax.
 - Define first onboarding success as a reachable local source URL; bridge
   setup, bridge registration, and bridge smoke checks are optional next steps.
 - Make `llmwiki-agent-bridge` setup optional and explicit.
@@ -134,6 +138,15 @@ source server.
 - `quickstart` must explain near the start that a printed, healthy local source
   URL is the minimum successful onboarding outcome and that bridge setup is
   optional.
+- After starting selected sources, `quickstart` must state that direct source
+  endpoints are healthy and remain usable if the user skips bridge setup.
+- When the user skips bridge setup, `quickstart` must print a generic
+  coding-agent registration handoff for every started source, including source
+  URL, health URL, manifest URL, MCP JSON-RPC URL (`/mcp`), and MCP Streamable
+  HTTP URL (`/mcp/stream`).
+- The direct-source handoff must avoid client-specific MCP configuration syntax
+  and state that `llmwiki-agent-bridge` can still be added later for source
+  fan-out or one normalized bridge across sources.
 - `start`/`quickstart` must not report a launched source as ready until its
   loopback HTTP health endpoint responds within a bounded timeout.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user

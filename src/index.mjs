@@ -434,14 +434,12 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     result.sourceUrls = sourceUrlsFromStartedSources(result.started.sources)
     writeStatus(output, ui, 'ok', `Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}`)
-    output.write(formatStartedSourceUrls(result.started.sources))
-    writeStatus(output, ui, 'info', 'You can use these source URLs directly from local tools.')
-    output.write('Add llmwiki-agent-bridge when you want source fan-out, A2A/MCP endpoints, runtime synthesis, or one normalized bridge artifact.\n')
+    writeStatus(output, ui, 'info', 'Started source endpoint(s) are healthy. If you skip bridge setup, quickstart will print direct MCP registration handoff details.')
 
     writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Done: optionally add bridge')
-    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the local source URLs above are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
-      writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source URL(s).')
-      output.write(formatStartedSourceUrls(result.started.sources))
+    if (!await confirmQuickstart(prompter, `Set up optional llmwiki-agent-bridge at ${bridgeUrl}? If you skip this, the direct local source endpoints are still usable.`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
+      writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
+      output.write(formatCodingAgentRegistrationHandoff(result.started.sources))
       result.skipped.push('bridge-setup', 'register', 'smoke')
       return result
     }
@@ -594,11 +592,58 @@ function sourceUrlsFromStartedSources(sources = []) {
   return sources.map((source) => source.url).filter(Boolean)
 }
 
-function formatStartedSourceUrls(sources = []) {
+function formatCodingAgentRegistrationHandoff(sources = []) {
   if (!sources.length) {
-    return 'No started source URLs were reported.\n'
+    return 'No started source endpoints were reported.\n'
   }
-  return `Local Knowledge Source URLs:\n${sources.map((source) => `  - ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
+  const sourceBlocks = sources.map((source) => {
+    const endpoints = sourceEndpointUrls(source.url)
+    return [
+      `  - ${source.title || source.name || source.id || 'LLMWiki source'}`,
+      `    source URL: ${endpoints.source}`,
+      `    health URL: ${endpoints.health}`,
+      `    manifest URL: ${endpoints.manifest}`,
+      `    MCP JSON-RPC URL (/mcp): ${endpoints.mcpJsonRpc}`,
+      `    MCP Streamable HTTP URL (/mcp/stream): ${endpoints.mcpStream}`,
+    ].join('\n')
+  })
+  return [
+    'Coding-agent registration handoff:',
+    'Use source, health, and manifest URLs for local checks.',
+    'For MCP-over-HTTP clients, prefer the MCP Streamable HTTP URL; JSON-RPC is a compatibility endpoint.',
+    'Exact client configuration syntax varies by client.',
+    ...sourceBlocks,
+    'You can still add llmwiki-agent-bridge later for source fan-out and one normalized bridge across sources.',
+  ].join('\n') + '\n'
+}
+
+function sourceEndpointUrls(sourceUrl) {
+  if (!sourceUrl) {
+    return {
+      source: '<not reported>',
+      health: '<not reported>',
+      manifest: '<not reported>',
+      mcpJsonRpc: '<not reported>',
+      mcpStream: '<not reported>',
+    }
+  }
+  const source = trimTrailingSlash(sourceUrl)
+  return {
+    source,
+    health: sourceEndpointUrl(source, '/health'),
+    manifest: sourceEndpointUrl(source, '/manifest'),
+    mcpJsonRpc: sourceEndpointUrl(source, '/mcp'),
+    mcpStream: sourceEndpointUrl(source, '/mcp/stream'),
+  }
+}
+
+function sourceEndpointUrl(sourceUrl, endpointPath) {
+  const parsed = new URL(sourceUrl)
+  const basePath = parsed.pathname.replace(/\/+$/, '')
+  parsed.pathname = `${basePath}${endpointPath}`
+  parsed.search = ''
+  parsed.hash = ''
+  return trimTrailingSlash(parsed.toString())
 }
 
 function writePathRedactionNotice(output, ui) {
@@ -2709,10 +2754,21 @@ export function resolveServeInvocation(options = {}) {
   ]
   for (const candidate of candidates) {
     if (safeIsFile(join(candidate, 'pyproject.toml'))) {
+      const venvCommand = localServeExecutable(candidate)
+      if (venvCommand) {
+        return { command: venvCommand, baseArgs: [], cwd: candidate }
+      }
       return { command: 'uv', baseArgs: ['run', 'llmwiki-serve'], cwd: candidate }
     }
   }
   return { command: 'llmwiki-serve', baseArgs: [], cwd: process.cwd() }
+}
+
+function localServeExecutable(root) {
+  const executable = process.platform === 'win32'
+    ? join(root, '.venv', 'Scripts', 'llmwiki-serve.exe')
+    : join(root, '.venv', 'bin', 'llmwiki-serve')
+  return safeIsFile(executable) ? executable : null
 }
 
 function splitCommandArgs(value) {

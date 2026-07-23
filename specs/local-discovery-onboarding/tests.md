@@ -64,7 +64,11 @@
   (`--path ./wiki`, `--workspace`, or bare invocation) and keeps
   `discover`/`start`/`register`/`smoke` examples in advanced/scriptable docs.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
-  start, then skip bridge setup successfully while printing direct source URLs.
+  start, then skip bridge setup successfully while printing direct source
+  endpoint handoff info.
+- Quickstart skip-bridge handoff lists the source URL, health URL, manifest URL,
+  MCP JSON-RPC URL (`/mcp`), and MCP Streamable HTTP URL (`/mcp/stream`) for
+  every started source without asserting client-specific configuration syntax.
 - Quickstart success copy treats a healthy printed local source URL as the
   minimum onboarding success and describes bridge setup as optional.
 - Quickstart default source selection hides advanced/lower-priority

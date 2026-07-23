@@ -26,14 +26,19 @@ directory. Use
 the bare command when you want the guided flow to propose a broader scan; it
 asks before scanning the current user's home directory.
 
-Minimum success: when quickstart starts `llmwiki-serve` and prints a loopback
-local source URL, first onboarding has succeeded. You can give that URL directly
-to a local agent or script. `llmwiki-agent-bridge` is optional; add it only when
-you want source fan-out, A2A/MCP surfaces, runtime-backed synthesis, or one
-normalized bridge artifact.
+Minimum success: when quickstart starts `llmwiki-serve` and reports healthy
+loopback source endpoints, first onboarding has succeeded. If you skip
+`llmwiki-agent-bridge`, quickstart prints a direct source handoff for each
+started source: source URL, health URL, manifest URL, MCP JSON-RPC URL
+(`/mcp`), and MCP Streamable HTTP URL (`/mcp/stream`). Use the source, health,
+and manifest URLs for local checks; use the MCP URLs and transport labels with
+coding agents or scripts that support MCP over HTTP. Exact client configuration
+syntax varies by client. `llmwiki-agent-bridge` can still be added later when
+you want source fan-out or one normalized bridge across sources.
 
-If `llmwiki-serve` is not on `PATH`, point the harness at a local checkout or
-environment explicitly, for example:
+If `llmwiki-serve` is not on `PATH`, a sibling `../llmwiki-serve` checkout with
+an existing `.venv` is used automatically when available. Otherwise point the
+harness at a local checkout or environment explicitly, for example:
 
 ```bash
 npx llmwiki-bridge-start@latest --path ./wiki \
@@ -49,7 +54,10 @@ comma-separated numbered selection for piped/non-interactive runs, validates
 selected folders only when you choose to start them, waits for started
 loopback source URLs to answer health checks, then explains that those URLs can
 be used directly without
-`llmwiki-agent-bridge`. Bridge setup is optional: if you opt in, quickstart uses
+`llmwiki-agent-bridge`. Bridge setup is optional: if you skip it, quickstart
+prints a coding-agent registration handoff for each started source with the
+source, health, manifest, MCP JSON-RPC, and MCP Streamable HTTP endpoints. If
+you opt in, quickstart uses
 an already running bridge or prints a safe start command such as
 `npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
 Quickstart runs that command only after a second explicit approval. Once a
@@ -159,7 +167,7 @@ lossless interpretation of Obsidian, Logseq, Dendron, Foam, or Quartz-specific
 syntax; manifest validation is the source of truth for whether the current
 `llmwiki-serve` can serve a candidate.
 
-`llmwiki-agent-bridge` remains optional. Use direct `llmwiki-serve` source URLs
-when your local agent or script can call the source itself. Add the bridge when
-you want source fan-out, A2A/MCP surfaces, runtime-backed synthesis, or one
-normalized bridge artifact.
+`llmwiki-agent-bridge` remains optional. Use the direct `llmwiki-serve`
+handoff URLs when your local agent or script can call each source itself. Add
+the bridge later when you want source fan-out, runtime-backed synthesis, or one
+normalized bridge across sources.

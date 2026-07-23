@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startSources } from '../src/index.mjs'
+import { detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -175,6 +175,31 @@ test('discover validation reports actionable llmwiki-serve invocation failures',
   assert.equal(candidate.startable, false)
   assert.match(candidate.validationError, /Could not run llmwiki-serve command/)
   assert.match(candidate.validationError, /--serve-command/)
+})
+
+test('resolveServeInvocation prefers a sibling checkout venv executable for long-running serve', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-serve-invocation-'))
+  const bridgeRoot = join(root, 'llmwiki-bridge-start')
+  const serveRoot = join(root, 'llmwiki-serve')
+  const scriptDir = process.platform === 'win32'
+    ? join(serveRoot, '.venv', 'Scripts')
+    : join(serveRoot, '.venv', 'bin')
+  const executable = join(scriptDir, process.platform === 'win32' ? 'llmwiki-serve.exe' : 'llmwiki-serve')
+  mkdirSync(bridgeRoot, { recursive: true })
+  mkdirSync(scriptDir, { recursive: true })
+  writeFileSync(join(serveRoot, 'pyproject.toml'), '[project]\nname = "llmwiki-serve"\n')
+  writeFileSync(executable, '')
+
+  const previousCwd = process.cwd()
+  process.chdir(bridgeRoot)
+  t.after(() => {
+    process.chdir(previousCwd)
+  })
+
+  const invocation = resolveServeInvocation({})
+  assert.equal(invocation.command, executable)
+  assert.deepEqual(invocation.baseArgs, [])
+  assert.equal(invocation.cwd, serveRoot)
 })
 
 test('parseCandidateSelection supports defaults, lists, all, cancel, and bounds checks', () => {
@@ -353,9 +378,72 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
-  assert.match(io.stdout.text, /source URLs directly/)
+  assert.match(io.stdout.text, /Coding-agent registration handoff:/)
+  assert.match(io.stdout.text, /Exact client configuration syntax varies by client/)
+  assert.match(io.stdout.text, /source URL: http:\/\/127\.0\.0\.1:11001/)
+  assert.match(io.stdout.text, /health URL: http:\/\/127\.0\.0\.1:11001\/health/)
+  assert.match(io.stdout.text, /manifest URL: http:\/\/127\.0\.0\.1:11001\/manifest/)
+  assert.match(io.stdout.text, /MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11001\/mcp/)
+  assert.match(io.stdout.text, /MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
+  assert.match(io.stdout.text, /llmwiki-agent-bridge later for source fan-out and one normalized bridge/)
   assert.match(io.stdout.text, /\[4\/5\] Done: optionally add bridge/)
+  assert.match(io.stdout.text, /direct local source endpoint\(s\)/)
+  assert(io.stdout.text.indexOf('Skipped bridge setup.') < io.stdout.text.indexOf('Coding-agent registration handoff:'))
+  assert.equal(countOccurrences(io.stdout.text, 'Coding-agent registration handoff:'), 1)
   assert.equal(countOccurrences(io.stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
+})
+
+test('quickstart skip-bridge handoff lists MCP endpoints for every started source', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'all', 'y', 'n']
+  const candidates = [
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+    { rank: 2, path: 'second-wiki', score: 70, confidence: 'high', markdownCount: 10, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        return { ...candidate, startable: true, manifest: { title: candidate.path, source_id: candidate.path, page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        return {
+          configPath: args.configPath,
+          sources: args.paths.map((path, index) => ({
+            id: path,
+            name: path,
+            title: path,
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: index === 0,
+            url: `http://127.0.0.1:${11001 + index}`,
+          })),
+        }
+      },
+    },
+  )
+
+  assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001', 'http://127.0.0.1:11002'])
+  assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+  assert.equal(countOccurrences(stdout.text, 'Coding-agent registration handoff:'), 1)
+  assert.equal(countOccurrences(stdout.text, 'MCP JSON-RPC URL (/mcp):'), 2)
+  assert.equal(countOccurrences(stdout.text, 'MCP Streamable HTTP URL (/mcp/stream):'), 2)
+  assert.match(stdout.text, /  - first-wiki\n    source URL: http:\/\/127\.0\.0\.1:11001\n    health URL: http:\/\/127\.0\.0\.1:11001\/health\n    manifest URL: http:\/\/127\.0\.0\.1:11001\/manifest\n    MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11001\/mcp\n    MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
+  assert.match(stdout.text, /  - second-wiki\n    source URL: http:\/\/127\.0\.0\.1:11002\n    health URL: http:\/\/127\.0\.0\.1:11002\/health\n    manifest URL: http:\/\/127\.0\.0\.1:11002\/manifest\n    MCP JSON-RPC URL \(\/mcp\): http:\/\/127\.0\.0\.1:11002\/mcp\n    MCP Streamable HTTP URL \(\/mcp\/stream\): http:\/\/127\.0\.0\.1:11002\/mcp\/stream/)
 })
 
 test('quickstart hides additional candidates by default and selects only recommended sources', async () => {
