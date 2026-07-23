@@ -107,11 +107,12 @@
   behavior before asking, and the background-start question says that
   quickstart will run the command detached, write logs, and wait for health.
 - Quickstart bridge setup approval is followed by a runtime setup choice before
-  bridge start. The choice list includes skip/evidence-only, existing
-  OpenAI-compatible LLM endpoint, Hermes, and DeepAgents.
-- Existing endpoint runtime setup prompts for endpoint, model, and profile,
-  passes the resulting runtime values to bridge start env, and enables
-  delegated-runtime smoke.
+  bridge start. The choice list includes skip/evidence-only, Hermes, and
+  DeepAgents, and does not include a generic/existing OpenAI-compatible
+  endpoint option.
+- Explicit preconfigured endpoint flags can still feed runtime values to
+  bridge start env and delegated-runtime smoke as a compatibility path without
+  appearing in the interactive first-run menu.
 - Existing running bridge runtime setup applies safe endpoint/model/profile
   fields through `/settings/config.json` before delegated-runtime smoke, and
   avoids sending API keys or bearer tokens.

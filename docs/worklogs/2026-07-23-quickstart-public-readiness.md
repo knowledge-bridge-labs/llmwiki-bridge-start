@@ -91,11 +91,10 @@ onboarding harness.
   endpoint for selected sources, and clarifies that the background-start prompt
   runs the safe command detached, writes logs, and waits for bridge health.
 - Follow-up on 2026-07-24: optional bridge setup now includes runtime setup
-  before bridge start. Users can choose skip/evidence-only, an existing
-  OpenAI-compatible endpoint, Hermes, or DeepAgents. Existing/already-running
-  runtime paths collect endpoint, model, and profile for
-  `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
-  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE`.
+  before bridge start. Users can choose skip/evidence-only, Hermes, or
+  DeepAgents. Explicit preconfigured endpoint flags remain a compatibility
+  path, but generic/existing OpenAI-compatible endpoints are no longer shown as
+  an interactive first-run menu option.
 - Follow-up on 2026-07-24: Hermes and DeepAgents are treated as first-class
   `llmwiki-agent-bridge` runtime profiles. The current repo/bridge docs confirm
   profile names and example models but do not confirm a Hermes or DeepAgents
@@ -169,8 +168,8 @@ onboarding harness.
   - bridge setup prompt copy and detached background-start explanation covered
   - Node test suite passed with 68 tests
 - Follow-up runtime/cross-platform tests:
-  - runtime setup choice flow covered for existing endpoint and
-    Hermes/DeepAgents guidance
+  - runtime setup choice flow covered for preconfigured endpoint compatibility
+    and Hermes/DeepAgents guidance
   - endpoint/model/profile propagation into bridge start runtime options and
     delegated-runtime smoke covered
   - already-running bridge runtime configuration through `/settings/config.json`

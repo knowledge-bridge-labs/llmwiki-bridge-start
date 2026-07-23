@@ -29,8 +29,10 @@
 - [x] Make TTY yes/no quickstart prompts complete on `y`/`n` keypress without
   Enter, add discovery progress feedback, and clarify bridge setup prompts.
 - [x] Add QuickStart bridge runtime setup choices for skip/evidence-only,
-  existing OpenAI-compatible endpoint, Hermes, and DeepAgents before bridge
-  startup.
+  Hermes, and DeepAgents before bridge startup.
+- [x] Remove generic/existing OpenAI-compatible endpoints from the interactive
+  first-run runtime setup menu while keeping explicit endpoint flags as a
+  compatibility path.
 - [x] Pass runtime setup endpoint/model/profile into bridge start env and smoke
   mode selection, with evidence-only fallback when endpoint setup is skipped.
 - [x] Apply configured runtime endpoint/model/profile to an already running

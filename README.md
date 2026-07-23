@@ -60,21 +60,17 @@ quickstart uses
 an already running bridge or prints a safe start command such as
 `npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
-runtime for this bridge run: skip/evidence-only, an existing OpenAI-compatible
-LLM endpoint, Hermes, or DeepAgents. Existing endpoints prompt for the runtime
-base URL, model, and profile, then pass those values as
-`LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
-`LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` to the bridge process. Hermes and
-DeepAgents are supported bridge runtime profiles; when a repo-confirmed
-runtime install command is not available, quickstart does not auto-install
-them. Instead it prints safe install/start guidance and asks for the endpoint
-after the runtime is running. If you skip runtime setup or leave the endpoint
-blank, quickstart continues with evidence-only bridge smoke. Quickstart runs
-the bridge start command only after a second explicit approval. Once a bridge
-is running, it merge-registers the started sources and runs an A2A-style smoke
-request. If an explicit LLM endpoint is configured through flags, environment,
-or the runtime setup step, smoke uses delegated-runtime mode; otherwise it uses
-evidence-only mode.
+runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents.
+Hermes and DeepAgents are the supported QuickStart runtime profiles. When a
+repo-confirmed runtime install command is not available, quickstart does not
+auto-install them. Instead it prints safe install/start guidance and asks for
+the endpoint after the runtime is running. If you skip runtime setup or leave
+the endpoint blank, quickstart continues with evidence-only bridge smoke.
+Quickstart runs the bridge start command only after a second explicit
+approval. Once a bridge is running, it merge-registers the started sources and
+runs an A2A-style smoke request. If an explicit LLM endpoint is configured
+through flags, quickstart treats it as a preconfigured compatibility path
+without adding it to the interactive first-run menu.
 
 Quickstart keeps the first selection list focused. By default it shows
 recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and

@@ -31,8 +31,8 @@ a low-friction way to find usable LLMWiki-compatible folders, start
   setup, bridge registration, and bridge smoke checks are optional next steps.
 - Make `llmwiki-agent-bridge` setup optional and explicit.
 - When the user opts into bridge setup, include LLM runtime setup before bridge
-  startup rather than treating Hermes, DeepAgents, or generic runtime
-  configuration as a later step.
+  startup rather than treating Hermes or DeepAgents runtime configuration as a
+  later step.
 - Optionally upsert sources into an existing bridge registry without deleting
   unrelated sources.
 - Optionally run an A2A-style smoke query against the bridge, using
@@ -48,10 +48,10 @@ a low-friction way to find usable LLMWiki-compatible folders, start
   `llmwiki-serve manifest` validation.
 - Crawling remote wikis, syncing app state, or publishing static sites.
 - Owning model runtime lifecycle, Redis, auth, TLS, Docker, or Kubernetes.
-  Quickstart may guide Hermes, DeepAgents, or generic OpenAI-compatible runtime
-  setup, but it must not auto-install or start a runtime unless this repository
-  or directly referenced bridge docs contain a confirmed safe command and the
-  user explicitly approves it.
+  Quickstart may guide Hermes or DeepAgents runtime setup, but it must not
+  auto-install or start a runtime unless this repository or directly referenced
+  bridge docs contain a confirmed safe command and the user explicitly approves
+  it.
 - Replacing `llmwiki-agent-bridge` orchestration.
 - Treating generated local work folders as canonical project docs.
 
@@ -176,11 +176,13 @@ source server.
   explicitly opts in.
 - After the user opts into bridge setup and before any bridge start attempt,
   `quickstart` must offer runtime setup choices for skip/evidence-only,
-  existing OpenAI-compatible LLM endpoint, Hermes, and DeepAgents.
-- The existing endpoint path must ask for endpoint, model, and runtime profile
-  values, and those values must be reflected in
+  Hermes, and DeepAgents. Generic/custom OpenAI-compatible endpoints must not
+  appear as an interactive first-run menu choice.
+- If an explicit LLM endpoint is provided through flags, quickstart may treat
+  it as a preconfigured compatibility path and reflect those values in
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
-  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` when quickstart starts the bridge.
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE`, but this path must not be advertised
+  as a happy-path option.
 - If `llmwiki-agent-bridge` is already running and the user configures a
   runtime endpoint during quickstart, quickstart must apply safe runtime fields
   through the bridge settings API before registration and smoke. If that live

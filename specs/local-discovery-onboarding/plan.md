@@ -34,10 +34,12 @@
      coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`) for each
      started source.
 9. Add bridge runtime setup inside the optional quickstart bridge step.
-   - Offer skip/evidence-only, existing OpenAI-compatible LLM endpoint, Hermes,
-     and DeepAgents before any bridge start attempt.
-   - Collect endpoint, model, and profile for existing endpoints and for
-     already-running Hermes/DeepAgents endpoints.
+   - Offer skip/evidence-only, Hermes, and DeepAgents before any bridge start
+     attempt.
+   - Collect endpoint and model for already-running Hermes/DeepAgents
+     endpoints, using the matching fixed runtime profile.
+   - Keep explicit `--llm-endpoint` support as a preconfigured compatibility
+     path, not as an interactive QuickStart menu choice.
    - Treat Hermes and DeepAgents as bridge runtime profiles. Only offer runtime
      auto-install execution when this repository or directly referenced bridge
      docs confirm the exact install command; otherwise print safe installation
@@ -107,9 +109,9 @@
 - Quickstart docs must define a printed healthy local source URL as the minimum
   successful onboarding outcome, with bridge setup clearly optional.
 - Quickstart docs must state that the bridge setup step now includes runtime
-  setup choices for skip/evidence-only, existing OpenAI-compatible endpoint,
-  Hermes, and DeepAgents, and that Hermes/DeepAgents use the bridge runtime
-  profiles documented by `llmwiki-agent-bridge`.
+  setup choices for skip/evidence-only, Hermes, and DeepAgents, and that
+  Hermes/DeepAgents use the bridge runtime profiles documented by
+  `llmwiki-agent-bridge`.
 - Quickstart docs must state that endpoint, model, and profile feed
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` for a started bridge.

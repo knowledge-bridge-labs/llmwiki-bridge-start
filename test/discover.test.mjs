@@ -1164,7 +1164,7 @@ test('quickstart TTY multiselect receives only recommended candidates by default
 test('quickstart generates bridge setup command without executing it and runs delegated smoke when configured', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '', '', '', '', 'n', 'y']
+  const answers = ['y', '1', 'y', 'y', 'n', 'y']
   const prompts = []
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788', 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
@@ -1240,10 +1240,9 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.bridgeSetup.executed, false)
   assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.match(stdout.text, /\[5\/5\] Register and smoke test/)
-  assert.match(stdout.text, /Runtime setup options:/)
-  assert.match(stdout.text, /existing LLM endpoint/)
-  assert.match(stdout.text, /Hermes/)
-  assert.match(stdout.text, /DeepAgents/)
+  assert.match(stdout.text, /Using preconfigured LLM runtime from explicit flags/)
+  assert.doesNotMatch(stdout.text, /Runtime setup options:/)
+  assert.doesNotMatch(stdout.text, /existing LLM endpoint/)
   assert.equal(result.runtimeSetup.configured, true)
   assert.equal(result.runtimeSetup.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(result.runtimeSetup.model, 'local-model')
@@ -1259,7 +1258,7 @@ test('quickstart generates bridge setup command without executing it and runs de
 test('quickstart registers started sources after starting bridge and passing health', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:9999/v1', 'demo-model', 'generic', 'y']
+  const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:9999/v1', 'demo-model', 'y']
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1323,7 +1322,7 @@ test('quickstart registers started sources after starting bridge and passing hea
         calls.push(['smoke-mode', args])
         assert.equal(args.options.llmEndpoint, 'http://127.0.0.1:9999/v1')
         assert.equal(args.options.llmModel, 'demo-model')
-        assert.equal(args.options.runtimeProfile, 'generic')
+        assert.equal(args.options.runtimeProfile, 'hermes')
         return { mode: 'delegated-runtime', reason: 'test runtime configured' }
       },
       async smokeBridge(args) {
@@ -1340,7 +1339,7 @@ test('quickstart registers started sources after starting bridge and passing hea
   assert.equal(result.runtimeSetup.configured, true)
   assert.equal(result.runtimeSetup.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(result.runtimeSetup.model, 'demo-model')
-  assert.equal(result.runtimeSetup.profile, 'generic')
+  assert.equal(result.runtimeSetup.profile, 'hermes')
   assert.equal(calls.find((call) => call[0] === 'bridge-start')[2].runtime.configured, true)
   assert.equal(calls.find((call) => call[0] === 'bridge-start')[2].runtime.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
@@ -1352,7 +1351,7 @@ test('quickstart registers started sources after starting bridge and passing hea
 test('quickstart applies Hermes runtime settings to an already running bridge', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '3', 'http://127.0.0.1:8642/v1', '']
+  const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:8642/v1', '']
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1434,7 +1433,7 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
 test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-install', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '4', '', 'n', 'n']
+  const answers = ['y', '1', 'y', 'y', '3', '', 'n', 'n']
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1501,6 +1500,8 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
   assert.match(stdout.text, /Runtime setup options:/)
   assert.match(stdout.text, /Hermes/)
   assert.match(stdout.text, /DeepAgents/)
+  assert.doesNotMatch(stdout.text, /existing LLM endpoint/)
+  assert.doesNotMatch(stdout.text, /\n  4\)/)
   assert.match(stdout.text, /No repo-confirmed auto-install command for DeepAgents was found/)
   assert.match(stdout.text, /--runtime-profile deepagents/)
   assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)

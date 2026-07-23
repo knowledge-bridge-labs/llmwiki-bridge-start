@@ -64,28 +64,31 @@ const RUNTIME_SETUP_CHOICES = [
     profile: 'generic',
   },
   {
-    id: RUNTIME_SETUP_EXISTING,
-    rank: '2',
-    label: 'existing LLM endpoint',
-    aliases: ['2', 'existing', 'endpoint', 'llm', 'existing-endpoint', 'existing-llm-endpoint'],
-    model: 'local-model',
-    profile: 'generic',
-  },
-  {
     id: RUNTIME_SETUP_HERMES,
-    rank: '3',
+    rank: '2',
     label: 'Hermes',
-    aliases: ['3', 'hermes'],
+    aliases: ['2', 'hermes'],
     model: 'hermes-agent',
     profile: 'hermes',
   },
   {
     id: RUNTIME_SETUP_DEEPAGENTS,
-    rank: '4',
+    rank: '3',
     label: 'DeepAgents',
-    aliases: ['4', 'deepagents', 'deep-agents'],
+    aliases: ['3', 'deepagents', 'deep-agents'],
     model: 'deepagents-local',
     profile: 'deepagents',
+  },
+]
+const RUNTIME_SETUP_COMPAT_CHOICES = [
+  ...RUNTIME_SETUP_CHOICES,
+  {
+    id: RUNTIME_SETUP_EXISTING,
+    rank: 'existing',
+    label: 'preconfigured LLM endpoint',
+    aliases: ['existing', 'endpoint', 'llm', 'existing-endpoint', 'existing-llm-endpoint'],
+    model: 'local-model',
+    profile: 'generic',
   },
 ]
 const QUICKSTART_STEP_TOTAL = 5
@@ -575,10 +578,35 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 }
 
 async function guideRuntimeSetup({ prompter, output, ui, options }) {
+  const requestedChoice = requestedRuntimeSetupChoice(options)
+  if (requestedChoice?.id === RUNTIME_SETUP_EXISTING) {
+    writeStatus(output, ui, 'info', 'Using explicitly requested preconfigured LLM endpoint. This compatibility path is not part of the default QuickStart menu.')
+    return promptRuntimeConnection({
+      prompter,
+      output,
+      ui,
+      options,
+      choice: requestedChoice,
+    })
+  }
+
+  if (!requestedChoice) {
+    const preconfigured = detectLlmRuntime(options, {})
+    if (preconfigured.configured) {
+      writeStatus(output, ui, 'ok', `Using preconfigured LLM runtime from explicit flags: profile=${preconfigured.profile}, model=${preconfigured.model}, endpoint=${preconfigured.baseUrl}`)
+      return configuredRuntimeSetup(runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING), preconfigured, {
+        runtimeSetup: RUNTIME_SETUP_EXISTING,
+        llmEndpoint: preconfigured.baseUrl,
+        llmModel: preconfigured.model,
+        runtimeProfile: preconfigured.profile,
+      })
+    }
+  }
+
   writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
   output.write(formatRuntimeSetupChoices())
 
-  const fallbackChoice = runtimeSetupDefaultChoice(options)
+  const fallbackChoice = requestedChoice || runtimeSetupDefaultChoice(options)
   const choice = await promptRuntimeSetupChoice(prompter, output, fallbackChoice)
   writeStatus(output, ui, 'choice', `Runtime setup: ${choice.label}`)
 
@@ -604,9 +632,8 @@ function formatRuntimeSetupChoices() {
   return [
     'Runtime setup options:',
     '  1) skip/evidence-only — do not configure a model runtime now',
-    '  2) existing LLM endpoint — enter an already running OpenAI-compatible runtime',
-    '  3) Hermes — use/install Hermes, then enter its OpenAI-compatible endpoint',
-    '  4) DeepAgents — use/install DeepAgents, then enter its OpenAI-compatible endpoint',
+    '  2) Hermes — use/install Hermes, then enter its endpoint',
+    '  3) DeepAgents — use/install DeepAgents, then enter its endpoint',
   ].join('\n') + '\n'
 }
 
@@ -621,7 +648,7 @@ async function promptRuntimeSetupChoice(prompter, output, fallbackChoice, { maxA
       if (!prompter.repromptYesNo || attempts >= maxAttempts) {
         throw error
       }
-      output?.write(`[fail] ${error.message}. Enter 1, 2, 3, 4, skip, existing, hermes, or deepagents.\n`)
+      output?.write(`[fail] ${error.message}. Enter 1, 2, 3, skip, hermes, or deepagents.\n`)
     }
   }
 }
@@ -631,25 +658,24 @@ function parseRuntimeSetupChoice(value, fallbackChoice = runtimeSetupChoiceById(
   if (!normalized) {
     return fallbackChoice
   }
-  const choice = RUNTIME_SETUP_CHOICES.find((candidate) => candidate.aliases.includes(normalized) || candidate.id === normalized)
+  const choice = RUNTIME_SETUP_COMPAT_CHOICES.find((candidate) => candidate.aliases.includes(normalized) || candidate.id === normalized)
   if (!choice) {
     throw new Error(`Unknown runtime setup option: ${value}`)
   }
   return choice
 }
 
-function runtimeSetupDefaultChoice(options = {}) {
+function requestedRuntimeSetupChoice(options = {}) {
   const requested = stringOption(options.runtimeSetup ?? options['runtime-setup'], '')
-  if (requested) {
-    return parseRuntimeSetupChoice(requested)
-  }
-  return detectLlmRuntime(options, process.env).configured
-    ? runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING)
-    : runtimeSetupChoiceById(RUNTIME_SETUP_SKIP)
+  return requested ? parseRuntimeSetupChoice(requested) : null
+}
+
+function runtimeSetupDefaultChoice(options = {}) {
+  return runtimeSetupChoiceById(RUNTIME_SETUP_SKIP)
 }
 
 function runtimeSetupChoiceById(id) {
-  return RUNTIME_SETUP_CHOICES.find((choice) => choice.id === id) || RUNTIME_SETUP_CHOICES[0]
+  return RUNTIME_SETUP_COMPAT_CHOICES.find((choice) => choice.id === id) || RUNTIME_SETUP_CHOICES[0]
 }
 
 function writeRuntimeInstallGuidance(output, ui, choice) {
@@ -822,6 +848,19 @@ function unconfiguredRuntimeSetup(choice, nextAction) {
     },
     runtime: detectLlmRuntime({ noLlmRuntime: true }, {}),
     nextAction,
+  }
+}
+
+function configuredRuntimeSetup(choice, runtime, runtimeOptions = {}) {
+  return {
+    choice: choice.id,
+    label: choice.label,
+    configured: true,
+    baseUrl: runtime.baseUrl,
+    model: runtime.model,
+    profile: runtime.profile,
+    runtimeOptions,
+    runtime,
   }
 }
 
@@ -3470,8 +3509,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|existing|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|existing|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -3491,7 +3530,7 @@ Discovery defaults to the current user's home directory and hides low-confidence
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
 Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
-After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, existing endpoint, Hermes, or DeepAgents.
+After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, Hermes, or DeepAgents.
 Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode.
 Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
 `
