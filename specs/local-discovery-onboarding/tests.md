@@ -50,6 +50,13 @@
   scriptable listing command.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
+- Quickstart default source selection hides additional app/example/demo/starter
+  candidates, keeps `all` scoped to the currently listed candidates, and
+  validates/starts only recommended selections.
+- Quickstart `--include-additional` renders recommended and additional
+  candidates as separate sections and allows selecting the additional section.
+- Quickstart with only additional candidates stops before selection/validation
+  unless `--include-additional` is set.
 - Quickstart TTY source selection routes through the checkbox multi-select
   adapter, preselects the first candidate, and maps selected ranks to candidate
   paths.

@@ -45,6 +45,17 @@ bridge is running, it merge-registers the started sources and runs an A2A-style
 smoke request. If an explicit LLM endpoint is configured, smoke uses
 delegated-runtime mode; otherwise it uses evidence-only mode.
 
+Quickstart keeps the first selection list focused. By default it shows
+recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
+LLMWiki Markdown roots that do not look like examples, demos, starter projects,
+or e2e fixtures. Compatible app vaults and lower-priority candidates are hidden
+from that default list when at least one recommended source exists. Use
+`--include-additional` to include Obsidian, Logseq, Dendron, Foam, Quartz,
+example, demo, starter, and e2e candidates in the selectable list. The
+scriptable `discover` command remains broad and reports all candidates that
+meet its score threshold. If quickstart finds only additional candidates, it
+stops before selection and asks you to rerun with `--include-additional`.
+
 `--yes` is intended for local smoke automation: it accepts discovery and source
 startup defaults, selects the first candidate, and still skips optional bridge
 setup unless `--setup-bridge` is also supplied.

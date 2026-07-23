@@ -259,7 +259,7 @@ test('quickstart can end after starting direct local source URLs without bridge 
   ]
 
   const result = await quickstart(
-    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
     io,
     {
       resolveServeInvocation() {
@@ -322,12 +322,157 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
   assert.match(io.stdout.text, /\[2\/5\] Choose source folders/)
+  assert.match(io.stdout.text, /Recommended source folders:/)
+  assert.match(io.stdout.text, /Additional compatible candidates:/)
   assert.match(io.stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert.match(io.stdout.text, /  2\) second-wiki \[Obsidian vault\] \(high\/70, 10 md\)/)
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
   assert.match(io.stdout.text, /source URLs directly/)
+})
+
+test('quickstart hides additional candidates by default and selects only recommended sources', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', 'all', 'y', 'n']
+  const candidates = [
+    { rank: 1, path: 'recommended-native', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+    { rank: 2, path: 'hidden-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+    { rank: 3, path: 'starter-e2e-wiki', score: 90, confidence: 'high', markdownCount: 100, signals: ['llmwiki-marker:.wiki-compiler.json', 'markdown:50+'] },
+    { rank: 4, path: join('project', 'wiki'), score: 65, confidence: 'high', markdownCount: 423, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: candidate.path, source_id: candidate.path, page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: args.paths.map((path, index) => ({
+            id: path,
+            title: path,
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: `http://127.0.0.1:${11001 + index}`,
+          })),
+        }
+      },
+    },
+  )
+
+  assert.deepEqual(calls.filter((call) => call[0] === 'validate').map((call) => call[1]), ['recommended-native', join('project', 'wiki')])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['recommended-native', join('project', 'wiki')])
+  assert.equal(result.candidateSelection.recommendedCount, 2)
+  assert.equal(result.candidateSelection.additionalCount, 2)
+  assert.equal(result.candidateSelection.hiddenAdditionalCount, 2)
+  assert.match(stdout.text, /Found 2 recommended source folder\(s\)/)
+  assert.match(stdout.text, /Recommended source folders:/)
+  assert.match(stdout.text, /2 additional compatible candidate\(s\) hidden by default/)
+  assert.match(stdout.text, /recommended-native \[Native LLMWiki\/OpenWiki\]/)
+  assert.match(stdout.text, /wiki \[LLMWiki Markdown\]/)
+  assert.doesNotMatch(stdout.text, /hidden-obsidian \[Obsidian vault\]/)
+  assert.doesNotMatch(stdout.text, /starter-e2e-wiki/)
+})
+
+test('quickstart stops when only additional candidates exist without opt-in', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const candidates = [
+    { rank: 1, path: 'only-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return 'y'
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {}
+      },
+    },
+  )
+
+  assert.equal(result.candidateSelection.recommendedCount, 0)
+  assert.equal(result.candidateSelection.additionalCount, 1)
+  assert.equal(result.candidateSelection.visibleCount, 0)
+  assert.deepEqual(calls.map((call) => call[0]), ['discover'])
+  assert.match(stdout.text, /No recommended LLMWiki source folders found/)
+  assert.match(stdout.text, /Use --include-additional/)
+  assert.doesNotMatch(stdout.text, /only-obsidian \[Obsidian vault\]/)
+  assert.deepEqual(result.skipped, ['selection', 'start', 'bridge-setup', 'register', 'smoke'])
+})
+
+test('quickstart include-additional shows compatible candidates when no recommended sources exist', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const candidates = [
+    { rank: 1, path: 'only-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.equal(result.candidateSelection.recommendedCount, 0)
+  assert.equal(result.candidateSelection.additionalCount, 1)
+  assert.equal(result.candidateSelection.visibleCount, 1)
+  assert.match(stdout.text, /Found 1 compatible candidate source folder\(s\)/)
+  assert.match(stdout.text, /Compatible candidates:/)
+  assert.match(stdout.text, /only-obsidian \[Obsidian vault\]/)
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
 
 test('quickstart renders pipe-friendly non-TTY prompts without color', async () => {
@@ -417,7 +562,7 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   ]
 
   const result = await quickstart(
-    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
     {
       stdout,
       stderr: stdout,
@@ -490,6 +635,8 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', secondPath]])
   assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, [secondPath])
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
+  assert.match(stdout.text, /Recommended source folders:/)
+  assert.match(stdout.text, /Additional compatible candidates:/)
   assert.match(stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert(stdout.text.includes(firstPath))
   assert(stdout.text.includes(secondPath))
@@ -497,6 +644,67 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert(!stdout.text.includes(`${secondPath.slice(0, 93)}...`))
   assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+})
+
+test('quickstart TTY multiselect receives only recommended candidates by default', async (t) => {
+  const previousNoColor = process.env.NO_COLOR
+  process.env.NO_COLOR = '1'
+  t.after(() => {
+    if (previousNoColor === undefined) {
+      delete process.env.NO_COLOR
+    } else {
+      process.env.NO_COLOR = previousNoColor
+    }
+  })
+
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', 'n']
+  const candidates = [
+    { rank: 1, path: 'recommended-native', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+    { rank: 2, path: 'hidden-obsidian', score: 70, confidence: 'high', markdownCount: 200, signals: ['obsidian:.obsidian', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      forceInteractiveCandidateSelection: true,
+      async prompt() {
+        return answers.shift()
+      },
+      clackPrompts: {
+        async multiselect(params) {
+          calls.push(['multiselect', params])
+          return [1]
+        },
+        isCancel(value) {
+          return value === Symbol.for('cancelled')
+        },
+        cancel(message) {
+          calls.push(['cancel', message])
+        },
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  const multiselectCall = calls.find((call) => call[0] === 'multiselect')
+  assert(multiselectCall)
+  assert.deepEqual(multiselectCall[1].options.map((option) => option.value), [1])
+  assert.equal(multiselectCall[1].options[0].label, '1) recommended-native [Native LLMWiki/OpenWiki]')
+  assert(!stdout.text.includes('hidden-obsidian [Obsidian vault]'))
+  assert.equal(result.candidateSelection.hiddenAdditionalCount, 1)
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
 
 test('quickstart generates bridge setup command without executing it and runs delegated smoke when configured', async () => {
@@ -1158,7 +1366,7 @@ test('quickstart labels frontmatter-only candidates as Generic Markdown', async 
   }]
 
   const result = await quickstart(
-    { path: '.', minScore: '10' },
+    { path: '.', minScore: '10', 'include-additional': true },
     {
       stdout,
       stderr: stdout,

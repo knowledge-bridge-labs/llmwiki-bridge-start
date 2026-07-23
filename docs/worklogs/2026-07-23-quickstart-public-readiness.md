@@ -25,6 +25,11 @@ onboarding harness.
 - Frontmatter-only folders, docs-like hub plus typed folders, and `hot.md`
   plus index/overview alone no longer classify as Native unless graph,
   compiler, or projection metadata is present.
+- Quickstart now keeps default source selection focused on recommended LLMWiki
+  sources only. Compatible app vaults and noisy example/demo/starter/e2e
+  candidates require `--include-additional`.
+- `all` in quickstart now means all currently listed candidates, not every
+  discovered candidate hidden by the quickstart display policy.
 - The non-interactive `all` selector is labeled as advanced to reduce accidental
   broad source startup.
 - Discovery asks before scanning the current user's home directory and explains
@@ -41,7 +46,7 @@ onboarding harness.
 
 - `npm run check`
   - syntax checks passed
-  - Node test suite passed with 50 tests
+  - Node test suite passed with 54 tests
   - package dry-run passed
 - Quickstart smoke:
   - bare `llmwiki-bridge-start` with `n` prints the concrete scan root and exits
@@ -64,9 +69,13 @@ onboarding harness.
   - home scan with `y`, then `q`, prints full paths and variant labels
   - broad home scan reduced noisy candidates from 13 to 9 after docs-like
     false-positive removal
-  - `personal-agent\data\ai-scene\wiki` is detected as `LLMWiki Markdown` and
+  - default quickstart shows 3 recommended source folders and hides 6
+    additional compatible candidates
+  - `--include-additional` shows all 9 candidates split into Recommended and
+    Additional sections
+  - a local source-like Markdown wiki is detected as `LLMWiki Markdown` and
     validates startable through `llmwiki-serve manifest`
-  - `langchain\langgraph\docs\docs` is hidden at the default threshold
+  - a local docs-like folder is hidden at the default threshold
 
 ## Commits
 
@@ -75,7 +84,8 @@ onboarding harness.
 - `2db8d53` — Align npm publish workflow with trusted publishing docs
 - `1b54e90` — Show full quickstart candidate paths
 - `335098e` — Clarify quickstart source selection
-- pending — Tighten quickstart source variant detection
+- `0536275` — Tighten quickstart source variant detection
+- pending — Focus quickstart default candidate selection
 
 ## Follow-ups
 

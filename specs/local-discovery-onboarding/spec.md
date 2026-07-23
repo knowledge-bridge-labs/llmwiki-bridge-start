@@ -88,6 +88,13 @@ source server.
   `discover` remains available for scriptable candidate listing.
 - `quickstart` must ask before discovery and make the default home-directory
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
+- `quickstart` must keep the default source selection list focused on
+  recommended LLMWiki source folders. Compatible app vaults and noisy
+  example/demo/starter/e2e candidates require `--include-additional` when at
+  least one recommended source exists.
+- If quickstart finds only additional candidates without `--include-additional`,
+  it must stop before selection, validation, or startup rather than selecting an
+  app vault or fixture by default.
 - `quickstart` must support TTY checkbox-style multi-select source startup,
   preserve comma-separated text selection for non-TTY/automation, and allow a
   successful direct-source-only exit before bridge setup.

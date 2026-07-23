@@ -49,6 +49,21 @@ const ADAPTER_VARIANTS = {
   'llmwiki-markdown': VARIANT_LLMWIKI_MARKDOWN,
   'generic-markdown': VARIANT_GENERIC_MARKDOWN,
 }
+const QUICKSTART_RECOMMENDED_VARIANTS = new Set([
+  VARIANT_NATIVE_LLMWIKI,
+  VARIANT_LLMWIKI_MARKDOWN,
+])
+const QUICKSTART_NOISY_PATH_HINTS = [
+  'benchmark',
+  'demo',
+  'e2e',
+  'example',
+  'fixture',
+  'sample',
+  'smoke',
+  'starter',
+  'template',
+]
 const ANSI_CODES = {
   reset: '\u001b[0m',
   boldCyan: '\u001b[1;36m',
@@ -356,10 +371,21 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
 
     writeQuickstartStep(output, ui, 2, QUICKSTART_STEP_TOTAL, 'Choose source folders')
-    writeStatus(output, ui, 'ok', `Found ${discovery.candidates.length} candidate source folder(s).`)
-    output.write(formatQuickstartCandidates(discovery.candidates))
+    const candidatePlan = planQuickstartCandidateSelection(discovery.candidates, options)
+    result.candidateSelection = summarizeQuickstartCandidateSelection(candidatePlan)
+    if (!candidatePlan.visibleCandidates.length) {
+      writeStatus(output, ui, 'skip', 'No recommended LLMWiki source folders found.')
+      output.write('Use --include-additional to include compatible app vaults, examples, and other lower-priority candidates.\n')
+      result.skipped.push('selection', 'start', 'bridge-setup', 'register', 'smoke')
+      return result
+    }
+    writeStatus(output, ui, 'ok', formatQuickstartCandidateCount(candidatePlan))
+    if (candidatePlan.hiddenAdditionalCount > 0) {
+      writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} additional compatible candidate(s) hidden by default. Use --include-additional to show app vaults, examples, demos, and starter/e2e sources.`)
+    }
+    output.write(formatQuickstartCandidateGroups(candidatePlan.groups))
 
-    const selected = await prompter.selectCandidates(discovery.candidates)
+    const selected = await prompter.selectCandidates(candidatePlan.visibleCandidates)
     result.selected = selected.map(summarizeCandidateForFlow)
     if (!selected.length) {
       writeStatus(output, ui, 'skip', 'Quickstart cancelled before starting sources.')
@@ -575,10 +601,108 @@ function formatQuickstartScanRoots(roots = []) {
   return roots.map((root) => `  - ${root}`).join('\n') + '\n'
 }
 
+function planQuickstartCandidateSelection(candidates = [], options = {}) {
+  const includeAdditional = boolOption(options.includeAdditional ?? options['include-additional'] ?? options.allCandidates ?? options['all-candidates'])
+  const recommended = []
+  const additional = []
+  for (const candidate of candidates) {
+    if (isRecommendedQuickstartCandidate(candidate)) {
+      recommended.push(candidate)
+    } else {
+      additional.push(candidate)
+    }
+  }
+
+  const showAdditional = includeAdditional
+  const groups = []
+  let nextRank = 1
+  if (recommended.length) {
+    const ranked = rankQuickstartCandidates(recommended, nextRank, 'recommended')
+    nextRank += ranked.length
+    groups.push({
+      kind: 'recommended',
+      title: 'Recommended source folders',
+      candidates: ranked,
+    })
+  }
+  if (showAdditional && additional.length) {
+    const ranked = rankQuickstartCandidates(additional, nextRank, 'additional')
+    groups.push({
+      kind: 'additional',
+      title: recommended.length ? 'Additional compatible candidates' : 'Compatible candidates',
+      candidates: ranked,
+    })
+  }
+
+  const visibleCandidates = groups.flatMap((group) => group.candidates)
+  return {
+    includeAdditional,
+    recommendedCount: recommended.length,
+    additionalCount: additional.length,
+    hiddenAdditionalCount: showAdditional ? 0 : additional.length,
+    visibleCandidates,
+    groups,
+  }
+}
+
+function rankQuickstartCandidates(candidates, startRank, quickstartGroup) {
+  return candidates.map((candidate, index) => ({
+    ...candidate,
+    discoveryRank: candidate.rank,
+    rank: startRank + index,
+    quickstartGroup,
+  }))
+}
+
+function isRecommendedQuickstartCandidate(candidate = {}) {
+  return QUICKSTART_RECOMMENDED_VARIANTS.has(candidateVariant(candidate)) && !hasQuickstartNoisyPathHint(candidate.path)
+}
+
+function hasQuickstartNoisyPathHint(path = '') {
+  return normalizePath(path)
+    .toLowerCase()
+    .split(sep)
+    .filter(Boolean)
+    .some((part) => QUICKSTART_NOISY_PATH_HINTS.some((hint) => part.includes(hint)))
+}
+
+function summarizeQuickstartCandidateSelection(plan) {
+  return {
+    recommendedCount: plan.recommendedCount,
+    additionalCount: plan.additionalCount,
+    hiddenAdditionalCount: plan.hiddenAdditionalCount,
+    includeAdditional: plan.includeAdditional,
+    visibleCount: plan.visibleCandidates.length,
+  }
+}
+
+function formatQuickstartCandidateCount(plan) {
+  const visible = plan.visibleCandidates.length
+  if (plan.includeAdditional && plan.recommendedCount && plan.additionalCount) {
+    return `Found ${visible} candidate source folder(s): ${plan.recommendedCount} recommended and ${plan.additionalCount} additional.`
+  }
+  if (plan.includeAdditional && !plan.recommendedCount) {
+    return `Found ${visible} compatible candidate source folder(s).`
+  }
+  return `Found ${visible} recommended source folder(s).`
+}
+
+function formatQuickstartCandidateGroups(groups = []) {
+  if (!groups.length) {
+    return 'No LLMWiki candidates found.\n'
+  }
+  const renderedGroups = groups.map((group) => `${group.title}:\n${formatQuickstartCandidateRows(group.candidates)}`)
+  return `${renderedGroups.join('\n')}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+}
+
 function formatQuickstartCandidates(candidates) {
   if (!candidates.length) {
     return 'No LLMWiki candidates found.\n'
   }
+  return `${formatQuickstartCandidateRows(candidates)}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+}
+
+function formatQuickstartCandidateRows(candidates) {
   const rows = candidates.map((candidate, index) => {
     const rank = candidate.rank || index + 1
     const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
@@ -589,7 +713,7 @@ function formatQuickstartCandidates(candidates) {
     const displayPath = candidate.path
     return `  ${rank}) ${title} [${variant}] (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
   })
-  return `${rows.join('\n')}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+  return rows.join('\n')
 }
 
 function candidateVariantLabel(candidate = {}) {
@@ -644,9 +768,6 @@ function classifyVariantFromSignals(signals = []) {
   if (hasSignalPrefix(signals, 'quartz')) {
     return VARIANT_QUARTZ
   }
-  if (hasSourceLikeName && (hasHubSignal || hasNativeRoot) && hasTypedDir && hasLargeMarkdownSet) {
-    return VARIANT_LLMWIKI_MARKDOWN
-  }
   if (
     (hasNativeRoot && (hasSidecarGraph || hasProjectionFrontmatter))
     || (hasTypedDir && (hasSidecarGraph || hasProjectionFrontmatter))
@@ -654,7 +775,7 @@ function classifyVariantFromSignals(signals = []) {
   ) {
     return VARIANT_NATIVE_LLMWIKI
   }
-  if (hasSourceLikeName && hasHubSignal && hasTypedDir && hasLargeMarkdownSet) {
+  if (hasSourceLikeName && (hasHubSignal || hasNativeRoot) && hasTypedDir && hasLargeMarkdownSet) {
     return VARIANT_LLMWIKI_MARKDOWN
   }
   return VARIANT_GENERIC_MARKDOWN
@@ -2639,8 +2760,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -2655,6 +2776,7 @@ Commands:
   smoke     Run a small bridge query; defaults to evidence-only.
   doctor    Check local tool and bridge readiness.
 
+Quickstart shows recommended LLMWiki source folders first; use --include-additional for app vaults, examples, demos, and starter/e2e sources.
 Discovery defaults to the current user's home directory and hides low-confidence generic folders.
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
