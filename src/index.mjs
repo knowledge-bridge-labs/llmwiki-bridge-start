@@ -1,11 +1,12 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, spinner as clackSpinner } from '@clack/prompts'
+import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect } from '@clack/prompts'
+import crossSpawn from 'cross-spawn'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8788'
@@ -19,11 +20,74 @@ const FAST_DISCOVERY_TIMEOUT_MS = 30000
 const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
 const DEFAULT_SOURCE_HEALTH_TIMEOUT_MS = 15000
 const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
+const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
+const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
 const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
+const RUNTIME_PROFILES = new Set(['generic', 'hermes', 'deepagents'])
+const BRIDGE_RUNTIME_ENV_KEYS_TO_SCRUB = [
+  'LLMWIKI_AGENT_BRIDGE_BASE_URL',
+  'LLMWIKI_AGENT_BRIDGE_MODEL',
+  'LLMWIKI_AGENT_BRIDGE_API_KEY',
+  'LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE',
+  'HERMES_BASE_URL',
+  'HERMES_MODEL',
+  'HERMES_API_KEY',
+  'HERMES_A2A_BRIDGE_RUNTIME_PROFILE',
+  'HERMES_A2A_BRIDGE_RUNTIME_ID',
+  'HERMES_A2A_BRIDGE_RUNTIME_NAME',
+  'HERMES_A2A_BRIDGE_RUNTIME',
+  'HERMES_A2A_BRIDGE_AGENT_RUNTIME',
+  'HERMES_A2A_BRIDGE_PROVIDER_ORGANIZATION',
+  'HERMES_A2A_BRIDGE_BEARER_TOKEN',
+  'DEEPAGENTS_BASE_URL',
+  'DEEPAGENTS_MODEL',
+  'DEEPAGENTS_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
+  'OPENAI_API_KEY',
+]
+const RUNTIME_SETUP_SKIP = 'skip'
+const RUNTIME_SETUP_EXISTING = 'existing'
+const RUNTIME_SETUP_HERMES = 'hermes'
+const RUNTIME_SETUP_DEEPAGENTS = 'deepagents'
+const RUNTIME_SETUP_CHOICES = [
+  {
+    id: RUNTIME_SETUP_SKIP,
+    rank: '1',
+    label: 'skip/evidence-only',
+    aliases: ['1', 'skip', 's', 'evidence', 'evidence-only', 'none'],
+    model: 'local-model',
+    profile: 'generic',
+  },
+  {
+    id: RUNTIME_SETUP_EXISTING,
+    rank: '2',
+    label: 'existing LLM endpoint',
+    aliases: ['2', 'existing', 'endpoint', 'llm', 'existing-endpoint', 'existing-llm-endpoint'],
+    model: 'local-model',
+    profile: 'generic',
+  },
+  {
+    id: RUNTIME_SETUP_HERMES,
+    rank: '3',
+    label: 'Hermes',
+    aliases: ['3', 'hermes'],
+    model: 'hermes-agent',
+    profile: 'hermes',
+  },
+  {
+    id: RUNTIME_SETUP_DEEPAGENTS,
+    rank: '4',
+    label: 'DeepAgents',
+    aliases: ['4', 'deepagents', 'deep-agents'],
+    model: 'deepagents-local',
+    profile: 'deepagents',
+  },
+]
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
 const GENERIC_MARKDOWN_SCORE_CAP = 25
@@ -317,6 +381,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     startBridgeCommand,
     waitForBridgeHealth,
     selectBridgeSmokeMode,
+    configureBridgeRuntime,
     ...commands,
   }
   const output = io.stdout || process.stdout
@@ -334,6 +399,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     validated: [],
     started: null,
     sourceUrls: [],
+    runtimeSetup: null,
     bridgeSetup: null,
     registered: null,
     smoked: null,
@@ -356,8 +422,10 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
     result.autoDiscover = true
 
-    const discoveryProgress = createQuickstartDiscoveryProgress(io, ui)
-    discoveryProgress.start('Discovering candidates without validation. Validation runs only if you start selected sources.')
+    writeStatus(output, ui, 'run', 'Discovery scans candidates without validation; validation runs only if you start selected sources.')
+    const discoveryProgressFactory = io.createDiscoveryProgress || createQuickstartDiscoveryProgress
+    const discoveryProgress = discoveryProgressFactory(io, ui)
+    discoveryProgress.start(DEFAULT_DISCOVERY_PROGRESS_MESSAGE)
     let discovery
     try {
       discovery = await runtime.discoverCandidates({
@@ -454,15 +522,26 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       return result
     }
 
+    result.runtimeSetup = await guideRuntimeSetup({
+      prompter,
+      output,
+      ui,
+      options,
+    })
+    const bridgeOptions = mergeRuntimeSetupOptions(options, result.runtimeSetup)
+
     result.bridgeSetup = await guideBridgeSetup({
       runtime,
       prompter,
       output,
       ui,
-      options,
+      options: bridgeOptions,
       bridgeUrl,
       logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
     })
+    const smokeOptions = result.bridgeSetup.runtimeConfiguration?.ok === false
+      ? mergeRuntimeSetupOptions(options, unconfiguredRuntimeSetup(runtimeSetupChoiceById(RUNTIME_SETUP_SKIP), 'Bridge runtime settings were not applied; quickstart falls back to evidence-only smoke.'))
+      : bridgeOptions
 
     if (result.bridgeSetup.continueToBridge === false) {
       writeStatus(output, ui, 'skip', 'Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.')
@@ -480,7 +559,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     writeStatus(output, ui, 'ok', `Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.`)
 
-    const smokePlan = await runtime.selectBridgeSmokeMode({ options, bridgeUrl, env: process.env })
+    const smokePlan = await runtime.selectBridgeSmokeMode({ options: smokeOptions, bridgeUrl, env: process.env })
     result.smokeMode = smokePlan.mode
     writeStatus(output, ui, 'run', `Running bridge smoke in ${formatBridgeModeLabel(smokePlan.mode)} mode (${smokePlan.reason}).`)
     result.smoked = await runtime.smokeBridge({
@@ -495,15 +574,283 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
   }
 }
 
+async function guideRuntimeSetup({ prompter, output, ui, options }) {
+  writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
+  output.write(formatRuntimeSetupChoices())
+
+  const fallbackChoice = runtimeSetupDefaultChoice(options)
+  const choice = await promptRuntimeSetupChoice(prompter, output, fallbackChoice)
+  writeStatus(output, ui, 'choice', `Runtime setup: ${choice.label}`)
+
+  if (choice.id === RUNTIME_SETUP_SKIP) {
+    writeStatus(output, ui, 'skip', 'Continuing with evidence-only bridge mode; no LLM runtime env will be passed to a started bridge.')
+    return unconfiguredRuntimeSetup(choice, 'Start or configure an OpenAI-compatible runtime later, then rerun with --llm-endpoint URL --llm-model MODEL --runtime-profile PROFILE.')
+  }
+
+  if (choice.id === RUNTIME_SETUP_HERMES || choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    writeRuntimeInstallGuidance(output, ui, choice)
+  }
+
+  return promptRuntimeConnection({
+    prompter,
+    output,
+    ui,
+    options,
+    choice,
+  })
+}
+
+function formatRuntimeSetupChoices() {
+  return [
+    'Runtime setup options:',
+    '  1) skip/evidence-only — do not configure a model runtime now',
+    '  2) existing LLM endpoint — enter an already running OpenAI-compatible runtime',
+    '  3) Hermes — use/install Hermes, then enter its OpenAI-compatible endpoint',
+    '  4) DeepAgents — use/install DeepAgents, then enter its OpenAI-compatible endpoint',
+  ].join('\n') + '\n'
+}
+
+async function promptRuntimeSetupChoice(prompter, output, fallbackChoice, { maxAttempts = 5 } = {}) {
+  let attempts = 0
+  while (true) {
+    const answer = await prompter.ask(`[?] Choose runtime setup before bridge start (${RUNTIME_SETUP_CHOICES.map((choice) => `${choice.rank}=${choice.label}`).join(', ')}; default ${fallbackChoice.rank})`, fallbackChoice.rank)
+    try {
+      return parseRuntimeSetupChoice(answer, fallbackChoice)
+    } catch (error) {
+      attempts += 1
+      if (!prompter.repromptYesNo || attempts >= maxAttempts) {
+        throw error
+      }
+      output?.write(`[fail] ${error.message}. Enter 1, 2, 3, 4, skip, existing, hermes, or deepagents.\n`)
+    }
+  }
+}
+
+function parseRuntimeSetupChoice(value, fallbackChoice = runtimeSetupChoiceById(RUNTIME_SETUP_SKIP)) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (!normalized) {
+    return fallbackChoice
+  }
+  const choice = RUNTIME_SETUP_CHOICES.find((candidate) => candidate.aliases.includes(normalized) || candidate.id === normalized)
+  if (!choice) {
+    throw new Error(`Unknown runtime setup option: ${value}`)
+  }
+  return choice
+}
+
+function runtimeSetupDefaultChoice(options = {}) {
+  const requested = stringOption(options.runtimeSetup ?? options['runtime-setup'], '')
+  if (requested) {
+    return parseRuntimeSetupChoice(requested)
+  }
+  return detectLlmRuntime(options, process.env).configured
+    ? runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING)
+    : runtimeSetupChoiceById(RUNTIME_SETUP_SKIP)
+}
+
+function runtimeSetupChoiceById(id) {
+  return RUNTIME_SETUP_CHOICES.find((choice) => choice.id === id) || RUNTIME_SETUP_CHOICES[0]
+}
+
+function writeRuntimeInstallGuidance(output, ui, choice) {
+  const installPlan = runtimeInstallPlan(choice)
+  if (installPlan.autoInstallAvailable) {
+    writeStatus(output, ui, 'info', `${choice.label} install command is documented for this repository. Quickstart can run it only after explicit approval.`)
+    output.write(`  ${formatCommand(installPlan.command)}\n`)
+    return
+  }
+  writeStatus(output, ui, 'info', `No repo-confirmed auto-install command for ${choice.label} was found, so quickstart will not install it automatically.`)
+  output.write([
+    `Safe ${choice.label} path: install and start ${choice.label} from its own trusted docs or local project until it exposes an OpenAI-compatible /v1/chat/completions endpoint.`,
+    `After it is running, enter its base URL below or rerun: llmwiki-bridge-start --setup-bridge --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}`,
+  ].join('\n') + '\n')
+}
+
+function runtimeInstallPlan(choice) {
+  return {
+    runtime: choice.id,
+    autoInstallAvailable: false,
+    command: null,
+  }
+}
+
+async function promptRuntimeConnection({ prompter, output, ui, options, choice }) {
+  const endpointDefault = runtimeEndpointDefault(choice, options, process.env)
+  const endpointAnswer = await promptRuntimeEndpoint(
+    prompter,
+    formatRuntimeEndpointPrompt(choice, endpointDefault),
+    endpointDefault,
+  )
+  const baseUrl = normalizeRuntimeBaseUrl(endpointAnswer)
+  if (!baseUrl) {
+    const nextAction = `Start ${choice.label} so it exposes an OpenAI-compatible endpoint, then rerun with --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}.`
+    writeStatus(output, ui, 'skip', `No runtime endpoint entered. Continuing with evidence-only bridge mode. Next action: ${nextAction}`)
+    return unconfiguredRuntimeSetup(choice, nextAction)
+  }
+
+  const model = await promptRuntimeValue(
+    prompter,
+    `[?] Runtime model name for LLMWIKI_AGENT_BRIDGE_MODEL`,
+    runtimeModelDefault(choice, options, process.env),
+  )
+  const profile = choice.id === RUNTIME_SETUP_EXISTING
+    ? await promptRuntimeProfile(
+        prompter,
+        output,
+        `[?] Runtime profile for LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE (generic, hermes, or deepagents)`,
+        runtimeProfileDefault(choice, options, process.env),
+      )
+    : choice.profile
+  const runtimeOptions = {
+    runtimeSetup: choice.id,
+    llmEndpoint: baseUrl,
+    llmModel: model || choice.model,
+    runtimeProfile: profile || choice.profile,
+  }
+  const runtime = detectLlmRuntime(runtimeOptions, {})
+  writeStatus(output, ui, 'ok', `Runtime configured for bridge start: profile=${runtime.profile}, model=${runtime.model}, endpoint=${runtime.baseUrl}`)
+  return {
+    choice: choice.id,
+    label: choice.label,
+    configured: true,
+    baseUrl: runtime.baseUrl,
+    model: runtime.model,
+    profile: runtime.profile,
+    runtimeOptions,
+    runtime,
+  }
+}
+
+function formatRuntimeEndpointPrompt(choice, endpointDefault) {
+  if (endpointDefault) {
+    return `[?] ${choice.label} runtime base URL (OpenAI-compatible; press Enter to use ${endpointDefault}, or type skip for evidence-only)`
+  }
+  return `[?] ${choice.label} runtime base URL (OpenAI-compatible, e.g. ${DEFAULT_BRIDGE_RUNTIME_BASE_URL}; press Enter to continue evidence-only)`
+}
+
+async function promptRuntimeEndpoint(prompter, question, fallback = '') {
+  const answer = await prompter.ask(question, fallback)
+  const value = String(answer ?? '').trim()
+  if (['skip', 'none', 'evidence', 'evidence-only'].includes(value.toLowerCase())) {
+    return ''
+  }
+  return value || fallback
+}
+
+async function promptRuntimeValue(prompter, question, fallback = '') {
+  const answer = await prompter.ask(question, fallback)
+  const value = String(answer ?? '').trim()
+  return value || fallback
+}
+
+async function promptRuntimeProfile(prompter, output, question, fallback = 'generic', { maxAttempts = 5 } = {}) {
+  let attempts = 0
+  while (true) {
+    const answer = await promptRuntimeValue(prompter, question, fallback)
+    try {
+      return parseRuntimeProfile(answer, fallback)
+    } catch (error) {
+      attempts += 1
+      if (!prompter.repromptYesNo || attempts >= maxAttempts) {
+        throw error
+      }
+      output?.write(`[fail] ${error.message}. Enter generic, hermes, or deepagents.\n`)
+    }
+  }
+}
+
+function runtimeEndpointDefault(choice, options = {}, env = process.env) {
+  return stringOption(
+    options.llmEndpoint
+      ?? options['llm-endpoint']
+      ?? options.runtimeBaseUrl
+      ?? options['runtime-base-url']
+      ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL
+      ?? (choice.id === RUNTIME_SETUP_HERMES ? env.HERMES_BASE_URL : undefined)
+      ?? (choice.id === RUNTIME_SETUP_DEEPAGENTS ? env.DEEPAGENTS_BASE_URL : undefined)
+      ?? env.OPENAI_BASE_URL,
+    '',
+  )
+}
+
+function runtimeModelDefault(choice, options = {}, env = process.env) {
+  return stringOption(
+    options.llmModel
+      ?? options['llm-model']
+      ?? options.model
+      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL
+      ?? (choice.id === RUNTIME_SETUP_HERMES ? env.HERMES_MODEL : undefined)
+      ?? (choice.id === RUNTIME_SETUP_DEEPAGENTS ? env.DEEPAGENTS_MODEL : undefined)
+      ?? env.OPENAI_MODEL,
+    choice.model,
+  )
+}
+
+function runtimeProfileDefault(choice, options = {}, env = process.env) {
+  return parseRuntimeProfile(stringOption(
+    options.runtimeProfile
+      ?? options['runtime-profile']
+      ?? env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE,
+    choice.profile,
+  ), choice.profile)
+}
+
+function normalizeRuntimeBaseUrl(value) {
+  const text = String(value || '').trim()
+  if (!text) {
+    return ''
+  }
+  const parsed = new URL(text)
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Unsupported runtime endpoint protocol: ${parsed.protocol}`)
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('Runtime endpoint URL must not contain credentials.')
+  }
+  return trimTrailingSlash(parsed.toString())
+}
+
+function unconfiguredRuntimeSetup(choice, nextAction) {
+  return {
+    choice: choice.id,
+    label: choice.label,
+    configured: false,
+    fallback: BRIDGE_MODE_EVIDENCE_ONLY,
+    runtimeOptions: {
+      runtimeSetup: choice.id,
+      noLlmRuntime: true,
+    },
+    runtime: detectLlmRuntime({ noLlmRuntime: true }, {}),
+    nextAction,
+  }
+}
+
+function mergeRuntimeSetupOptions(options = {}, runtimeSetup = null) {
+  return {
+    ...options,
+    ...(runtimeSetup?.runtimeOptions || {}),
+  }
+}
+
 async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridgeUrl, logDir }) {
   const existingHealth = await runtime.checkBridgeHealth(bridgeUrl)
+  const runtimeInfo = detectLlmRuntime(options)
   if (existingHealth.ok) {
     writeStatus(output, ui, 'ok', `llmwiki-agent-bridge is already reachable at ${bridgeUrl}.`)
+    const runtimeConfiguration = await maybeConfigureBridgeRuntime({
+      runtime,
+      output,
+      ui,
+      prompter,
+      bridgeUrl,
+      runtimeInfo,
+    })
     return {
       bridgeUrl,
       executed: false,
-      continueToBridge: true,
+      continueToBridge: runtimeConfiguration.ok !== false || runtimeConfiguration.continueToEvidenceOnly,
       health: existingHealth,
+      runtimeConfiguration,
     }
   }
 
@@ -521,14 +868,14 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
   output.write('Safe start command (no global install; npx uses the package cache, or a local checkout is used when available):\n')
   output.write(`  ${commandText}\n`)
 
-  if (detectLlmRuntime(options).configured) {
+  if (runtimeInfo.configured) {
     writeStatus(output, ui, 'info', 'An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.')
   } else {
     writeStatus(output, ui, 'info', 'No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.')
   }
 
   if (await confirmQuickstart(prompter, `Start llmwiki-agent-bridge now in the background on ${bridgeUrl}?\nQuickstart will run the command above detached, write logs under ${logDir}, then wait for bridge health.`, false)) {
-    const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: detectLlmRuntime(options) })
+    const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: runtimeInfo })
     Object.assign(result, { executed: true }, started)
     writeStatus(output, ui, 'run', `Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}`)
     try {
@@ -546,6 +893,33 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
   writeStatus(output, ui, 'info', `If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.`)
   result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?\nChoose yes only if the bridge is already running or will become healthy during the check.`, false)
   return result
+}
+
+async function maybeConfigureBridgeRuntime({ runtime, output, ui, prompter, bridgeUrl, runtimeInfo }) {
+  if (!runtimeInfo.configured) {
+    return { ok: true, skipped: true, reason: 'no runtime endpoint configured' }
+  }
+  writeStatus(output, ui, 'run', `Applying runtime settings to the running bridge at ${bridgeUrl}.`)
+  try {
+    const configured = await runtime.configureBridgeRuntime({
+      bridgeUrl,
+      runtime: runtimeInfo,
+    })
+    writeStatus(output, ui, 'ok', `Bridge runtime settings applied: profile=${runtimeInfo.profile}, model=${runtimeInfo.model}, endpoint=${runtimeInfo.baseUrl}`)
+    return { ok: true, skipped: false, ...configured }
+  } catch (error) {
+    writeStatus(output, ui, 'fail', `Could not apply runtime settings to the running bridge: ${error.message}`)
+    const continueToEvidenceOnly = await confirmQuickstart(
+      prompter,
+      `Continue with registration and evidence-only smoke against ${bridgeUrl}?\nChoose no if you want to open the bridge settings page and fix runtime settings first.`,
+      true,
+    )
+    return {
+      ok: false,
+      error: error.message,
+      continueToEvidenceOnly,
+    }
+  }
 }
 
 function createQuickstartUi(io = {}) {
@@ -576,40 +950,75 @@ function writeStatus(output, ui, kind, message) {
   output.write(`${formatStatusMarker(ui, kind)} ${message}\n`)
 }
 
-function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstartUi(io)) {
+export function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstartUi(io)) {
   const output = io.stdout || process.stdout
-  const useSpinner = shouldUseDiscoverySpinner(io)
-  const clackSpinnerFactory = io.clackPrompts?.spinner || clackSpinner
-  let spinner = null
+  const useHeartbeat = shouldUseDiscoveryHeartbeat(io)
+  const intervalMs = positiveIntOption(io.discoveryProgressIntervalMs, DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS)
+  const clock = io.discoveryProgressClock || globalThis
+  let timer = null
+  let openLine = false
+
+  function startTimer() {
+    if (!useHeartbeat || typeof clock.setInterval !== 'function') {
+      return
+    }
+    timer = clock.setInterval(() => {
+      output.write('.')
+    }, intervalMs)
+    if (typeof timer?.unref === 'function') {
+      timer.unref()
+    }
+  }
+
+  function clearTimer() {
+    if (timer && typeof clock.clearInterval === 'function') {
+      clock.clearInterval(timer)
+    }
+    timer = null
+  }
+
+  function finish(kind, message) {
+    clearTimer()
+    if (openLine) {
+      output.write('\n')
+      openLine = false
+    }
+    writeStatus(output, ui, kind, message)
+  }
 
   return {
-    start(message) {
-      writeStatus(output, ui, 'run', message)
-      if (useSpinner) {
-        spinner = clackSpinnerFactory({ output })
-        spinner.start('Searching local folders for LLMWiki candidates...')
+    start(message = DEFAULT_DISCOVERY_PROGRESS_MESSAGE) {
+      if (useHeartbeat) {
+        output.write(`${formatStatusMarker(ui, 'run')} ${message}`)
+        openLine = true
+        startTimer()
+        return
       }
+      writeStatus(output, ui, 'run', message)
     },
     stop(message) {
-      if (spinner) {
-        spinner.stop(message)
-        return
-      }
-      writeStatus(output, ui, 'ok', message)
+      finish('ok', message)
     },
     error(message) {
-      if (spinner?.error) {
-        spinner.error(message)
-        return
-      }
-      writeStatus(output, ui, 'fail', message)
+      finish('fail', message)
     },
   }
 }
 
-function shouldUseDiscoverySpinner(io = {}) {
+function shouldUseDiscoveryHeartbeat(io = {}) {
+  if (io.forceDiscoveryHeartbeat) {
+    return true
+  }
+  if (io.disableDiscoveryHeartbeat || isCiEnvironment()) {
+    return false
+  }
+  const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
-  return Boolean(io.forceDiscoverySpinner || (output.isTTY && typeof io.prompt !== 'function'))
+  return Boolean(input.isTTY || output.isTTY)
+}
+
+function isCiEnvironment() {
+  return Boolean(process.env.CI || process.env.GITHUB_ACTIONS || process.env.TF_BUILD || process.env.BUILD_BUILDID)
 }
 
 function formatQuickstartDiscoveryProgressSummary(discovery) {
@@ -964,7 +1373,6 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   const clackPrompts = {
     confirm: io.clackPrompts?.confirm || clackConfirm,
     multiselect: io.clackPrompts?.multiselect || clackMultiselect,
-    spinner: io.clackPrompts?.spinner || clackSpinner,
     isCancel: io.clackPrompts?.isCancel || isClackCancel,
     cancel: io.clackPrompts?.cancel || clackCancel,
   }
@@ -2269,7 +2677,7 @@ export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEF
       const errFd = openSync(err, 'a')
       let child
       try {
-        child = spawn(
+        child = nodeSpawn(
           serveInvocation.command,
           [...serveInvocation.baseArgs, 'serve', path, '--host', host, '--port', String(port)],
           {
@@ -2661,14 +3069,14 @@ export function bridgeStartPlan(options = {}) {
 
   const packageName = stringOption(options.bridgePackage ?? options['bridge-package'], DEFAULT_BRIDGE_PACKAGE_SPEC)
   return {
-    command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    command: 'npx',
     args: ['--yes', packageName],
     packageName,
     source: 'npx-package',
   }
 }
 
-export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEFAULT_BRIDGE_URL, logDir = defaultLogDir(), runtime = detectLlmRuntime({}) } = {}) {
+export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEFAULT_BRIDGE_URL, logDir = defaultLogDir(), runtime = detectLlmRuntime({}), spawnProcess = crossSpawn } = {}) {
   mkdirSync(logDir, { recursive: true })
   const parsed = new URL(bridgeUrl)
   const bridgeId = slug(`llmwiki-agent-bridge-${parsed.hostname}-${parsed.port || '80'}`)
@@ -2676,10 +3084,38 @@ export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEF
   const err = join(logDir, `${bridgeId}.err.log`)
   const outFd = openSync(out, 'a')
   const errFd = openSync(err, 'a')
-  const env = {
-    ...process.env,
-    LLMWIKI_AGENT_BRIDGE_HOST: parsed.hostname,
-    LLMWIKI_AGENT_BRIDGE_PORT: parsed.port || (parsed.protocol === 'https:' ? '443' : '80'),
+  const env = bridgeStartEnv(parsed, runtime)
+  let child
+  try {
+    child = spawnProcess(plan.command, plan.args || [], {
+      cwd: plan.cwd || process.cwd(),
+      detached: true,
+      env,
+      stdio: ['ignore', outFd, errFd],
+      windowsHide: true,
+    })
+  } finally {
+    closeFileDescriptor(outFd)
+    closeFileDescriptor(errFd)
+  }
+  child.unref()
+  return {
+    command: plan.command,
+    args: plan.args || [],
+    processId: child.pid,
+    logs: { stdout: out, stderr: err },
+  }
+}
+
+function bridgeStartEnv(parsedBridgeUrl, runtime = detectLlmRuntime({}), baseEnv = process.env) {
+  const env = { ...baseEnv }
+  if (!runtime.configured || runtime.disabled) {
+    scrubBridgeRuntimeEnv(env)
+  }
+  return {
+    ...env,
+    LLMWIKI_AGENT_BRIDGE_HOST: parsedBridgeUrl.hostname,
+    LLMWIKI_AGENT_BRIDGE_PORT: parsedBridgeUrl.port || (parsedBridgeUrl.protocol === 'https:' ? '443' : '80'),
     ...(runtime.configured
       ? {
           LLMWIKI_AGENT_BRIDGE_BASE_URL: runtime.baseUrl,
@@ -2688,19 +3124,13 @@ export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEF
         }
       : {}),
   }
-  const child = spawn(plan.command, plan.args || [], {
-    detached: true,
-    env,
-    stdio: ['ignore', outFd, errFd],
-    windowsHide: true,
-  })
-  child.unref()
-  return {
-    command: plan.command,
-    args: plan.args || [],
-    processId: child.pid,
-    logs: { stdout: out, stderr: err },
+}
+
+function scrubBridgeRuntimeEnv(env) {
+  for (const key of BRIDGE_RUNTIME_ENV_KEYS_TO_SCRUB) {
+    delete env[key]
   }
+  return env
 }
 
 export async function checkBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL) {
@@ -2725,6 +3155,27 @@ export async function waitForBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL, { time
   return health
 }
 
+export async function configureBridgeRuntime({ bridgeUrl = DEFAULT_BRIDGE_URL, runtime = detectLlmRuntime({}), timeoutMs = 5000 } = {}) {
+  if (!runtime.configured) {
+    return { ok: true, skipped: true, reason: 'no runtime endpoint configured' }
+  }
+  const response = await fetchJson(new URL('/settings/config.json', bridgeUrl), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      runtimeProfile: parseRuntimeProfile(runtime.profile, 'generic'),
+      baseUrl: normalizeRuntimeBaseUrl(runtime.baseUrl),
+      model: runtime.model,
+    }),
+    timeoutMs,
+  })
+  return {
+    ok: true,
+    skipped: false,
+    response,
+  }
+}
+
 export async function launchAgentBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, packageName = DEFAULT_BRIDGE_PACKAGE_SPEC, logDir = defaultLogDir(), runtime = detectLlmRuntime({}), timeoutMs = 15000 } = {}) {
   const plan = bridgeStartPlan({ bridgePackage: packageName })
   const started = startBridgeCommand(plan, { bridgeUrl, logDir, runtime })
@@ -2742,37 +3193,65 @@ export async function launchAgentBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, packag
 }
 
 export function detectLlmRuntime(options = {}, env = process.env) {
-  const baseUrl = stringOption(
+  if (isLlmRuntimeDisabled(options)) {
+    return {
+      configured: false,
+      baseUrl: '',
+      model: 'local-model',
+      profile: 'generic',
+      disabled: true,
+    }
+  }
+  const baseUrl = normalizeRuntimeBaseUrl(stringOption(
     options.llmEndpoint
       ?? options['llm-endpoint']
       ?? options.runtimeBaseUrl
       ?? options['runtime-base-url']
       ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL
       ?? env.HERMES_BASE_URL
+      ?? env.DEEPAGENTS_BASE_URL
       ?? env.OPENAI_BASE_URL,
     '',
-  )
+  ))
   const model = stringOption(
     options.llmModel
       ?? options['llm-model']
       ?? options.model
       ?? env.LLMWIKI_AGENT_BRIDGE_MODEL
       ?? env.HERMES_MODEL
+      ?? env.DEEPAGENTS_MODEL
       ?? env.OPENAI_MODEL,
     'local-model',
   )
-  const profile = stringOption(
+  const profile = parseRuntimeProfile(stringOption(
     options.runtimeProfile
       ?? options['runtime-profile']
       ?? env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE,
     'generic',
-  )
+  ), 'generic')
   return {
     configured: Boolean(baseUrl),
     baseUrl,
     model,
     profile,
   }
+}
+
+function parseRuntimeProfile(value, fallback = 'generic') {
+  const normalized = String(value || fallback || 'generic').trim().toLowerCase()
+  const profile = normalized === 'deep-agents' ? 'deepagents' : normalized
+  if (!RUNTIME_PROFILES.has(profile)) {
+    throw new Error(`Runtime profile must be one of: ${[...RUNTIME_PROFILES].join(', ')}`)
+  }
+  return profile
+}
+
+function isLlmRuntimeDisabled(options = {}) {
+  return options.noLlmRuntime === true
+    || options['no-llm-runtime'] === true
+    || options.llmRuntime === false
+    || options.runtimeSetup === RUNTIME_SETUP_SKIP
+    || options['runtime-setup'] === RUNTIME_SETUP_SKIP
 }
 
 function bridgeModeOption(value, fallback) {
@@ -2791,6 +3270,10 @@ export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_
   const requestedMode = stringOption(options.mode ?? options['orchestration-mode'], '')
   if (requestedMode) {
     return { mode: bridgeModeOption(requestedMode, BRIDGE_MODE_EVIDENCE_ONLY), reason: 'requested with --mode' }
+  }
+
+  if (isLlmRuntimeDisabled(options)) {
+    return { mode: BRIDGE_MODE_EVIDENCE_ONLY, reason: 'runtime setup selected evidence-only' }
   }
 
   const runtimeInfo = detectLlmRuntime(options, env)
@@ -2987,8 +3470,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--llm-endpoint URL] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|existing|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|existing|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -3008,7 +3491,8 @@ Discovery defaults to the current user's home directory and hides low-confidence
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
 Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
-Bridge smoke defaults to evidence-only unless --mode or quickstart runtime detection selects another mode.
+After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, existing endpoint, Hermes, or DeepAgents.
+Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode.
 Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
 `
 }
@@ -3027,6 +3511,11 @@ function stringOption(value, fallback) {
 function intOption(value, fallback) {
   const parsed = Number.parseInt(stringOption(value, ''), 10)
   return Number.isInteger(parsed) ? parsed : fallback
+}
+
+function positiveIntOption(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ''), 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
 function boolOption(value) {

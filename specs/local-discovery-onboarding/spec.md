@@ -30,11 +30,14 @@ a low-friction way to find usable LLMWiki-compatible folders, start
 - Define first onboarding success as a reachable local source URL; bridge
   setup, bridge registration, and bridge smoke checks are optional next steps.
 - Make `llmwiki-agent-bridge` setup optional and explicit.
+- When the user opts into bridge setup, include LLM runtime setup before bridge
+  startup rather than treating Hermes, DeepAgents, or generic runtime
+  configuration as a later step.
 - Optionally upsert sources into an existing bridge registry without deleting
   unrelated sources.
 - Optionally run an A2A-style smoke query against the bridge, using
-  delegated-runtime when an explicit LLM endpoint is configured and
-  evidence-only otherwise.
+  delegated-runtime when an explicit LLM endpoint is configured through flags,
+  environment, or quickstart runtime setup, and evidence-only otherwise.
 
 ## Non-goals
 
@@ -44,7 +47,11 @@ a low-friction way to find usable LLMWiki-compatible folders, start
 - Guaranteeing that a detected app vault is startable without
   `llmwiki-serve manifest` validation.
 - Crawling remote wikis, syncing app state, or publishing static sites.
-- Managing model runtimes, Redis, auth, TLS, Docker, or Kubernetes.
+- Owning model runtime lifecycle, Redis, auth, TLS, Docker, or Kubernetes.
+  Quickstart may guide Hermes, DeepAgents, or generic OpenAI-compatible runtime
+  setup, but it must not auto-install or start a runtime unless this repository
+  or directly referenced bridge docs contain a confirmed safe command and the
+  user explicitly approves it.
 - Replacing `llmwiki-agent-bridge` orchestration.
 - Treating generated local work folders as canonical project docs.
 
@@ -128,8 +135,8 @@ source server.
   keypress immediately without requiring Enter. Non-TTY, piped, injected
   `io.prompt`, and `--yes` flows must keep their text/flag fallbacks.
 - After discovery approval, quickstart must show visible discovery progress:
-  a spinner in TTY terminals and clear start/completion transcript lines in
-  non-TTY output.
+  a visible heartbeat/progress line in TTY terminals and clear
+  start/completion transcript lines in non-TTY output.
 - `quickstart` must keep the default source selection list focused on
   recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
   LLMWiki Markdown roots. Quickstart must explain that Native
@@ -167,6 +174,40 @@ source server.
   loopback HTTP health endpoint responds within a bounded timeout.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user
   explicitly opts in.
+- After the user opts into bridge setup and before any bridge start attempt,
+  `quickstart` must offer runtime setup choices for skip/evidence-only,
+  existing OpenAI-compatible LLM endpoint, Hermes, and DeepAgents.
+- The existing endpoint path must ask for endpoint, model, and runtime profile
+  values, and those values must be reflected in
+  `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` when quickstart starts the bridge.
+- If `llmwiki-agent-bridge` is already running and the user configures a
+  runtime endpoint during quickstart, quickstart must apply safe runtime fields
+  through the bridge settings API before registration and smoke. If that live
+  settings write fails, quickstart must avoid delegated-runtime smoke by
+  falling back to evidence-only or stopping before bridge checks.
+- Hermes and DeepAgents must be presented as first-class bridge runtime
+  profiles. If the user already has one running, quickstart must collect its
+  endpoint and model, then use the matching fixed runtime profile. If not,
+  quickstart must provide a safe install and start path. Auto-install is
+  allowed only when the current repository or directly referenced bridge docs
+  confirm the exact command/package; otherwise quickstart must not run an
+  installer and must instead print safe guidance, then prompt for the endpoint
+  after the runtime is running.
+- If the user selects Hermes or DeepAgents but skips installation or endpoint
+  input, quickstart must continue with an evidence-only bridge path and print a
+  clear next action for rerunning with `--llm-endpoint`, `--llm-model`, and
+  `--runtime-profile`.
+- Runtime setup results must flow through the same runtime detection path used
+  by bridge startup env construction and bridge smoke mode selection. An
+  explicit skip/evidence-only runtime setup choice must prevent inherited
+  runtime environment variables from switching smoke mode to delegated-runtime.
+- When evidence-only runtime setup is selected or runtime setup is otherwise
+  unconfigured, bridge process startup must scrub known runtime and API-key
+  environment variables before spawning the bridge child process.
+- Bridge process startup must use a cross-platform spawn adapter such as
+  `cross-spawn`, not a hand-written `cmd.exe`/OS-specific wrapper. The same
+  bridge start path must work on Windows, macOS, and Linux.
 - `quickstart --yes` must remain safe for smoke automation: accept discovery and
   source-start defaults, select the first candidate, and skip optional bridge
   setup unless `--setup-bridge` is also supplied.

@@ -84,12 +84,35 @@ onboarding harness.
   immediate keypress-capable confirm adapter, so pressing `y` or `n` completes
   the choice without Enter while still printing the `[choice]` transcript echo.
 - Follow-up on 2026-07-24: discovery now has visible progress after approval:
-  TTY runs get a spinner and non-TTY transcripts get clear start/completion
-  status lines.
+  TTY runs get a heartbeat/progress line and non-TTY transcripts get clear
+  start/completion status lines.
 - Follow-up on 2026-07-24: the bridge step now explains what
   `llmwiki-agent-bridge` adds before asking, makes the setup question about one
   endpoint for selected sources, and clarifies that the background-start prompt
   runs the safe command detached, writes logs, and waits for bridge health.
+- Follow-up on 2026-07-24: optional bridge setup now includes runtime setup
+  before bridge start. Users can choose skip/evidence-only, an existing
+  OpenAI-compatible endpoint, Hermes, or DeepAgents. Existing/already-running
+  runtime paths collect endpoint, model, and profile for
+  `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE`.
+- Follow-up on 2026-07-24: Hermes and DeepAgents are treated as first-class
+  `llmwiki-agent-bridge` runtime profiles. The current repo/bridge docs confirm
+  profile names and example models but do not confirm a Hermes or DeepAgents
+  runtime auto-install command, so quickstart prints safe install/start
+  guidance and falls back to evidence-only if the endpoint is blank.
+- Follow-up on 2026-07-24: when `llmwiki-agent-bridge` is already running,
+  quickstart now applies entered runtime endpoint/model/profile fields through
+  `/settings/config.json` before delegated-runtime smoke. The settings write
+  sends only safe runtime fields and does not prompt for API keys or bridge
+  bearer tokens.
+- Follow-up on 2026-07-24: evidence-only/unconfigured bridge startup now
+  scrubs inherited runtime/API-key environment variables before spawning the
+  bridge child process, so a skipped runtime setup cannot accidentally inherit
+  local model credentials.
+- Follow-up on 2026-07-24: bridge background startup now uses `cross-spawn`
+  for cross-platform command resolution instead of a hand-written Windows
+  `cmd.exe` wrapper.
 
 ## Validation
 
@@ -140,10 +163,25 @@ onboarding harness.
     prompt separates the question, scan-scope explanation, and `[Y/n]` marker
     onto separate lines
 - Follow-up prompt/progress tests:
-  - TTY yes/no confirm adapter and discovery spinner path covered with mocks
+  - TTY yes/no confirm adapter and discovery heartbeat/progress path covered
+    with mocks
   - non-TTY discovery progress start/completion transcript covered
   - bridge setup prompt copy and detached background-start explanation covered
   - Node test suite passed with 68 tests
+- Follow-up runtime/cross-platform tests:
+  - runtime setup choice flow covered for existing endpoint and
+    Hermes/DeepAgents guidance
+  - endpoint/model/profile propagation into bridge start runtime options and
+    delegated-runtime smoke covered
+  - already-running bridge runtime configuration through `/settings/config.json`
+    covered, including no API key/bearer-token fields
+  - invalid runtime profiles rejected instead of being silently accepted
+  - evidence-only skip disables inherited runtime env detection
+  - evidence-only bridge startup scrubs inherited runtime/API-key env values
+  - Windows `.cmd` bridge commands are passed directly to the cross-platform
+    spawn adapter without a `cmd.exe` wrapper
+  - targeted runtime/bridge/quickstart/env test subset passed with 75 tests
+  - `npm run check` passed with 75 Node tests plus package dry-run
 
 ## Commits
 
@@ -158,8 +196,8 @@ onboarding harness.
 - `e6ecc3f` — Separate discover inventory from quickstart policy
 - `b73c2c8` — Polish quickstart candidate guidance
 - `94a6125` — Polish quickstart first-run transcript
-- pending — Add immediate quickstart prompts and progress
-- pending — Improve customer onboarding flow
+- `613b134` — Add immediate quickstart prompts and progress
+- pending — Add runtime onboarding to bridge quickstart
 
 ## Follow-ups
 

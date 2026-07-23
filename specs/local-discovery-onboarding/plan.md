@@ -33,9 +33,24 @@
    - When the user completes without bridge setup, print one generic
      coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`) for each
      started source.
-9. Add an optional bridge smoke command that uses evidence-only mode by default
+9. Add bridge runtime setup inside the optional quickstart bridge step.
+   - Offer skip/evidence-only, existing OpenAI-compatible LLM endpoint, Hermes,
+     and DeepAgents before any bridge start attempt.
+   - Collect endpoint, model, and profile for existing endpoints and for
+     already-running Hermes/DeepAgents endpoints.
+   - Treat Hermes and DeepAgents as bridge runtime profiles. Only offer runtime
+     auto-install execution when this repository or directly referenced bridge
+     docs confirm the exact install command; otherwise print safe installation
+     guidance and ask for the endpoint after the runtime is running.
+   - Feed the runtime setup result into runtime detection, bridge start env, and
+     smoke mode selection. If the endpoint is skipped or blank, force the
+     evidence-only bridge path for this quickstart run.
+10. Start `llmwiki-agent-bridge` with `cross-spawn` so package command
+    resolution works cross-platform without a hand-written Windows `cmd.exe`
+    wrapper.
+11. Add an optional bridge smoke command that uses evidence-only mode by default
    and delegated-runtime when an explicit LLM endpoint is configured.
-10. Verify with unit tests, package dry-run, targeted local discovery, and a
+12. Verify with unit tests, package dry-run, targeted local discovery, and a
    local source restart smoke.
 
 ## Risks
@@ -64,6 +79,12 @@
 - Existing bridge registry settings must not be overwritten accidentally.
 - Rich prompt libraries can break automation if used unconditionally; gate
   interactive prompts on TTY and keep fallback output snapshot-tested.
+- Hermes/DeepAgents install commands can drift or be absent from the current
+  docs; do not auto-install unless the command is confirmed in repo docs and the
+  user explicitly approves it. Prefer endpoint entry plus evidence-only fallback
+  when uncertain.
+- Hand-written Windows command wrappers can diverge from macOS/Linux behavior;
+  rely on `cross-spawn` for bridge process startup.
 - Spawned source processes can fail after launch because of port conflicts,
   missing runtime dependencies, or adapter errors; verify `/health` before
   presenting a URL as ready and clean up failed child processes.
@@ -85,6 +106,17 @@
   visible through `--include-additional`.
 - Quickstart docs must define a printed healthy local source URL as the minimum
   successful onboarding outcome, with bridge setup clearly optional.
+- Quickstart docs must state that the bridge setup step now includes runtime
+  setup choices for skip/evidence-only, existing OpenAI-compatible endpoint,
+  Hermes, and DeepAgents, and that Hermes/DeepAgents use the bridge runtime
+  profiles documented by `llmwiki-agent-bridge`.
+- Quickstart docs must state that endpoint, model, and profile feed
+  `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` for a started bridge.
+- Quickstart docs must state that Hermes/DeepAgents runtime auto-install is not
+  attempted unless a repo-confirmed command exists; otherwise quickstart prints
+  safe installation guidance and continues evidence-only if no endpoint is
+  entered.
 - Quickstart docs must explain the skip-bridge MCP registration URL handoff and
   avoid client-specific MCP configuration syntax.
 - README Quick Start must move `discover`, `start`, `register`, and `smoke`

@@ -101,13 +101,35 @@
 - Quickstart TTY yes/no prompts route through an immediate keypress-capable
   confirm adapter so `y`/`n` completes without Enter, while injected prompt and
   non-TTY fallback paths remain text-based.
-- Quickstart discovery progress renders a TTY spinner and records clear
-  non-TTY start/completion transcript lines.
+- Quickstart discovery progress renders a visible TTY heartbeat/progress line
+  and records clear non-TTY start/completion transcript lines.
 - Quickstart bridge setup copy explains bridge purpose and direct MCP skip
   behavior before asking, and the background-start question says that
   quickstart will run the command detached, write logs, and wait for health.
+- Quickstart bridge setup approval is followed by a runtime setup choice before
+  bridge start. The choice list includes skip/evidence-only, existing
+  OpenAI-compatible LLM endpoint, Hermes, and DeepAgents.
+- Existing endpoint runtime setup prompts for endpoint, model, and profile,
+  passes the resulting runtime values to bridge start env, and enables
+  delegated-runtime smoke.
+- Existing running bridge runtime setup applies safe endpoint/model/profile
+  fields through `/settings/config.json` before delegated-runtime smoke, and
+  avoids sending API keys or bearer tokens.
+- Hermes and DeepAgents runtime setup prints first-class profile guidance and,
+  when no repo-confirmed install command exists, does not auto-install. It
+  prints safe install/start guidance, prompts for an endpoint after the runtime
+  is running, uses the matching fixed runtime profile, and falls back to
+  evidence-only if the endpoint is blank.
+- Runtime setup skip/evidence-only disables inherited runtime env detection for
+  the quickstart bridge smoke path.
+- Evidence-only or unconfigured bridge startup scrubs inherited runtime/API-key
+  environment variables from the spawned bridge child process while preserving
+  normal environment and explicit bridge host/port settings.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
+- Bridge start uses the `cross-spawn` adapter directly for package commands,
+  including Windows `.cmd` command names, without a hand-written `cmd.exe`
+  wrapper.
 - CLI output may include full local paths for candidate disambiguation but must
   warn users to redact or replace them before publishing screenshots, logs,
   docs, or issue reports.
