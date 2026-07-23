@@ -14,6 +14,13 @@ onboarding harness.
 - Piped, non-interactive, and `--yes` runs keep text/flag fallbacks.
 - Candidate source paths are printed in full so users can identify the correct
   wiki folder before starting servers.
+- Quickstart now prints the concrete scan root(s) before asking for discovery
+  approval.
+- Candidate selection rows now include source variant labels such as Native
+  LLMWiki/OpenWiki, Obsidian vault, Logseq graph, Dendron workspace, Foam
+  workspace, Quartz source, or Generic Markdown.
+- The non-interactive `all` selector is labeled as advanced to reduce accidental
+  broad source startup.
 - Discovery asks before scanning the current user's home directory and explains
   how to constrain scope with `--path`, `--workspace`, or `--cwd`.
 - Source startup validates selected folders with `llmwiki-serve manifest`.
@@ -30,6 +37,11 @@ onboarding harness.
   - syntax checks passed
   - Node test suite passed with 36 tests
   - package dry-run passed
+- Quickstart smoke:
+  - bare `llmwiki-bridge-start` with `n` prints the concrete scan root and exits
+    before discovery
+  - bare `llmwiki-bridge-start` with `y`, then `q`, prints full candidate paths,
+    variant labels, and exits before validation/start
 - `npm audit --omit=dev`
   - no known vulnerabilities
 - Local tarball smoke:

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
@@ -29,6 +29,8 @@ test('runCli starts quickstart when no subcommand is provided', async () => {
 
   assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
   assert(stdout.text.includes('[1/5] Discover sources'))
+  assert(stdout.text.includes('[info] Will scan these root folder(s):'))
+  assert(stdout.text.includes(homedir()))
   assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
@@ -50,6 +52,8 @@ test('runCli keeps explicit quickstart available', async () => {
 
   assert(stdout.text.includes('llmwiki-bridge-start quickstart'))
   assert(stdout.text.includes('[1/5] Discover sources'))
+  assert(stdout.text.includes('[info] Will scan these root folder(s):'))
+  assert(stdout.text.includes(homedir()))
   assert(stdout.text.includes('[skip] Skipped discovery.'))
   assert(stdout.text.includes('Skipped discovery.'))
   assert.equal(prompts.length, 1)
@@ -317,8 +321,8 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
   assert.match(io.stdout.text, /\[2\/5\] Choose source folders/)
-  assert.match(io.stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
-  assert.match(io.stdout.text, /  2\) second-wiki \(high\/70, 10 md\)/)
+  assert.match(io.stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
+  assert.match(io.stdout.text, /  2\) second-wiki \[Obsidian vault\] \(high\/70, 10 md\)/)
   assert.doesNotMatch(io.stdout.text, /signals:/)
   assert.match(io.stdout.text, /Invalid candidate selection/)
   assert.match(io.stdout.text, /Validation runs only if you start selected sources/)
@@ -372,7 +376,7 @@ test('quickstart non-TTY text fallback fails invalid candidate input without rep
     /Invalid candidate selection/,
   )
 
-  assert.match(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.match(stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert(stdout.text.includes(longPath))
   assert(!stdout.text.includes(`${longPath.slice(0, 93)}...`))
   assert.doesNotMatch(stdout.text, /Enter candidate ranks/)
@@ -476,6 +480,8 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert.equal(multiselectCall[1].message, 'Select source folders to start')
   assert.deepEqual(multiselectCall[1].initialValues, [1])
   assert.deepEqual(multiselectCall[1].options.map((option) => option.value), [1, 2])
+  assert.equal(multiselectCall[1].options[0].label, '1) first-wiki [Native LLMWiki/OpenWiki]')
+  assert.equal(multiselectCall[1].options[1].label, '2) second-wiki [Obsidian vault]')
   assert(multiselectCall[1].options[0].hint.includes(firstPath))
   assert(multiselectCall[1].options[1].hint.includes(secondPath))
   assert(!multiselectCall[1].options[0].hint.includes('...'))
@@ -483,7 +489,7 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', secondPath]])
   assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, [secondPath])
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
-  assert.match(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.match(stdout.text, /  1\) first-wiki \[Native LLMWiki\/OpenWiki\] \(high\/80, 20 md\)/)
   assert(stdout.text.includes(firstPath))
   assert(stdout.text.includes(secondPath))
   assert(!stdout.text.includes(`${firstPath.slice(0, 93)}...`))

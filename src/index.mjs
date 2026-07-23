@@ -304,6 +304,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'info', 'Start local Knowledge Source endpoints first; the agent bridge is optional.')
 
     writeQuickstartStep(output, ui, 1, QUICKSTART_STEP_TOTAL, 'Discover sources')
+    writeStatus(output, ui, 'info', 'Will scan these root folder(s):')
+    output.write(formatQuickstartScanRoots(roots))
     if (!await confirmQuickstart(prompter, 'Auto-discover local LLMWiki/knowledge source folders? Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.', true)) {
       writeStatus(output, ui, 'skip', 'Skipped discovery.')
       output.write('Run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
@@ -543,6 +545,13 @@ function formatStartedSourceUrls(sources = []) {
   return `Local Knowledge Source URLs:\n${sources.map((source) => `  - ${source.title || source.name || source.id}: ${source.url}`).join('\n')}\n`
 }
 
+function formatQuickstartScanRoots(roots = []) {
+  if (!roots.length) {
+    return '  - <none>\n'
+  }
+  return roots.map((root) => `  - ${root}`).join('\n') + '\n'
+}
+
 function formatQuickstartCandidates(candidates) {
   if (!candidates.length) {
     return 'No LLMWiki candidates found.\n'
@@ -550,13 +559,48 @@ function formatQuickstartCandidates(candidates) {
   const rows = candidates.map((candidate, index) => {
     const rank = candidate.rank || index + 1
     const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const variant = candidateVariantLabel(candidate)
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
       : `${candidate.markdownCount} md`
     const displayPath = candidate.path
-    return `  ${rank}) ${title} (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
+    return `  ${rank}) ${title} [${variant}] (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
   })
-  return `${rows.join('\n')}\n  all) start all listed candidates\n  q) cancel\n`
+  return `${rows.join('\n')}\n  all) select all listed candidates (advanced)\n  q) cancel\n`
+}
+
+function candidateVariantLabel(candidate = {}) {
+  const signals = Array.isArray(candidate.signals) ? candidate.signals : []
+  if (candidate.manifest?.adapter) {
+    return `${candidate.manifest.adapter} source`
+  }
+  if (signals.some((signal) => (
+    signal.startsWith('llmwiki-marker')
+    || signal.startsWith('llmwiki-root')
+    || signal.startsWith('llmwiki-typed-dir')
+    || signal.startsWith('sidecar-graph')
+    || signal.startsWith('frontmatter:source_refs')
+    || signal.startsWith('frontmatter:review_state')
+    || signal.startsWith('frontmatter:wiki_title')
+  ))) {
+    return 'Native LLMWiki/OpenWiki'
+  }
+  if (signals.some((signal) => signal.startsWith('obsidian'))) {
+    return 'Obsidian vault'
+  }
+  if (signals.some((signal) => signal.startsWith('logseq'))) {
+    return 'Logseq graph'
+  }
+  if (signals.some((signal) => signal.startsWith('dendron'))) {
+    return 'Dendron workspace'
+  }
+  if (signals.some((signal) => signal.startsWith('foam'))) {
+    return 'Foam workspace'
+  }
+  if (signals.some((signal) => signal.startsWith('quartz'))) {
+    return 'Quartz source'
+  }
+  return 'Generic Markdown'
 }
 
 function compactText(value, maxLength) {
@@ -733,12 +777,13 @@ function formatCandidateMultiselectOptions(candidates) {
   return candidates.map((candidate, index) => {
     const rank = candidateRank(candidate, index)
     const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const variant = candidateVariantLabel(candidate)
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
       : `${candidate.markdownCount} md`
     return {
       value: rank,
-      label: `${rank}) ${title}`,
+      label: `${rank}) ${title} [${variant}]`,
       hint: `${candidate.confidence}/${candidate.score}, ${pageText} — ${candidate.path}`,
     }
   })
