@@ -332,9 +332,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 
     writeQuickstartStep(output, ui, 2, QUICKSTART_STEP_TOTAL, 'Choose source folders')
     writeStatus(output, ui, 'ok', `Found ${discovery.candidates.length} candidate source folder(s).`)
-    if (!prompter.usesInteractiveCandidateSelection) {
-      output.write(formatQuickstartCandidates(discovery.candidates))
-    }
+    output.write(formatQuickstartCandidates(discovery.candidates))
 
     const selected = await prompter.selectCandidates(discovery.candidates)
     result.selected = selected.map(summarizeCandidateForFlow)
@@ -555,7 +553,7 @@ function formatQuickstartCandidates(candidates) {
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
       : `${candidate.markdownCount} md`
-    const displayPath = compactText(shortDisplayPath(candidate.path), 96)
+    const displayPath = candidate.path
     return `  ${rank}) ${title} (${candidate.confidence}/${candidate.score}, ${pageText})\n     ${displayPath}`
   })
   return `${rows.join('\n')}\n  all) start all listed candidates\n  q) cancel\n`
@@ -567,18 +565,6 @@ function compactText(value, maxLength) {
     return text
   }
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`
-}
-
-function shortDisplayPath(value) {
-  const path = String(value || '')
-  if (!path || !isAbsolute(path)) {
-    return path
-  }
-  const fromCwd = relative(process.cwd(), path)
-  if (fromCwd && !fromCwd.startsWith('..') && !isAbsolute(fromCwd)) {
-    return `.${sep}${fromCwd}`
-  }
-  return path
 }
 
 function createQuickstartPrompter(io, { yes = false } = {}) {
@@ -753,7 +739,7 @@ function formatCandidateMultiselectOptions(candidates) {
     return {
       value: rank,
       label: `${rank}) ${title}`,
-      hint: compactText(`${candidate.confidence}/${candidate.score}, ${pageText} — ${shortDisplayPath(candidate.path)}`, 96),
+      hint: `${candidate.confidence}/${candidate.score}, ${pageText} — ${candidate.path}`,
     }
   })
 }

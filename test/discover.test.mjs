@@ -346,8 +346,14 @@ test('quickstart renders pipe-friendly non-TTY prompts without color', async () 
 test('quickstart non-TTY text fallback fails invalid candidate input without reprompting forever', async () => {
   const stdout = captureWritable()
   const stdin = Readable.from(['y\n2x\n'])
+  const longPath = join(
+    mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-full-path-fallback-')),
+    'nested-source-candidates',
+    'with-an-extra-long-visible-parent-folder-name-for-selection',
+    'first-wiki',
+  )
   const candidates = [
-    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 1, path: longPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
   ]
 
   await assert.rejects(
@@ -367,6 +373,8 @@ test('quickstart non-TTY text fallback fails invalid candidate input without rep
   )
 
   assert.match(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert(stdout.text.includes(longPath))
+  assert(!stdout.text.includes(`${longPath.slice(0, 93)}...`))
   assert.doesNotMatch(stdout.text, /Enter candidate ranks/)
 })
 
@@ -384,10 +392,23 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   const calls = []
   const stdout = captureWritable()
   const answers = ['y', 'y', 'n']
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-full-path-clack-'))
+  const firstPath = join(
+    root,
+    'nested-source-candidates',
+    'with-an-extra-long-visible-parent-folder-name-for-selection',
+    'first-wiki',
+  )
+  const secondPath = join(
+    root,
+    'nested-source-candidates',
+    'with-another-extra-long-visible-parent-folder-name-for-selection',
+    'second-wiki',
+  )
 
   const candidates = [
-    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
-    { rank: 2, path: 'second-wiki', score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
+    { rank: 1, path: firstPath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview'] },
+    { rank: 2, path: secondPath, score: 70, confidence: 'high', markdownCount: 10, signals: ['obsidian:.obsidian'] },
   ]
 
   const result = await quickstart(
@@ -455,10 +476,18 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert.equal(multiselectCall[1].message, 'Select source folders to start')
   assert.deepEqual(multiselectCall[1].initialValues, [1])
   assert.deepEqual(multiselectCall[1].options.map((option) => option.value), [1, 2])
-  assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', 'second-wiki']])
-  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, ['second-wiki'])
+  assert(multiselectCall[1].options[0].hint.includes(firstPath))
+  assert(multiselectCall[1].options[1].hint.includes(secondPath))
+  assert(!multiselectCall[1].options[0].hint.includes('...'))
+  assert(!multiselectCall[1].options[1].hint.includes('...'))
+  assert.deepEqual(calls.filter((call) => call[0] === 'validate'), [['validate', secondPath]])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].paths, [secondPath])
   assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:11001'])
-  assert.doesNotMatch(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert.match(stdout.text, /  1\) first-wiki \(high\/80, 20 md\)/)
+  assert(stdout.text.includes(firstPath))
+  assert(stdout.text.includes(secondPath))
+  assert(!stdout.text.includes(`${firstPath.slice(0, 93)}...`))
+  assert(!stdout.text.includes(`${secondPath.slice(0, 93)}...`))
   assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
 })
