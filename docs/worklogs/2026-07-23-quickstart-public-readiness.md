@@ -34,12 +34,18 @@ onboarding harness.
   policy.
 - Quickstart now annotates hidden/additional candidates with reason categories:
   app vault, noisy path, or generic Markdown.
+- Quickstart now labels non-recommended candidates as advanced/lower-priority
+  rather than broadly compatible, reducing accidental selection pressure.
+- Quickstart now explains the difference between Native LLMWiki/OpenWiki and
+  LLMWiki Markdown in the selection step.
+- Public docs now warn maintainers to redact full local paths before publishing
+  screenshots, logs, docs, or issue examples.
 - `all` in quickstart now means all currently listed candidates, not every
   discovered candidate hidden by the quickstart display policy.
 - Strong direct child `wiki/` sources inside app vaults are recommended by
   default quickstart, while the parent app vault remains discoverable and moves
-  to the additional section. Weak child `wiki/` folders remain below the default
-  discovery threshold.
+  to the advanced/lower-priority section. Weak child `wiki/` folders remain
+  below the default discovery threshold.
 - Noisy-path quickstart matching is token-based, so substring-only names do not
   get hidden accidentally.
 - The non-interactive `all` selector is labeled as advanced to reduce accidental
@@ -82,11 +88,11 @@ onboarding harness.
   - broad home scan reduced noisy candidates from 13 to 9 after docs-like
     false-positive removal
   - default quickstart shows 3 recommended source folders and hides 6
-    additional compatible candidates
+    advanced/lower-priority candidates
   - `--include-additional` shows all 9 candidates split into Recommended and
-    Additional sections
+    advanced/lower-priority sections
   - after app-vault child `wiki/` preference, default home quickstart shows 5
-    recommended source folders and hides 4 additional compatible candidates
+    recommended source folders and hides 4 advanced/lower-priority candidates
   - after discover/quickstart policy split, default home quickstart shows
     recommended child wiki sources while additional app/generic/noisy candidates
     stay hidden unless `--include-additional` is set

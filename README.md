@@ -47,16 +47,19 @@ delegated-runtime mode; otherwise it uses evidence-only mode.
 
 Quickstart keeps the first selection list focused. By default it shows
 recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
-LLMWiki Markdown roots. Compatible app vaults, graphs, workspaces, generic
-Markdown folders, and noisy example/demo/starter/e2e paths are additional.
-Additional candidates are hidden from the default quickstart selection list
-when at least one recommended source exists. Use `--include-additional` to
-render recommended and additional candidates as separate selectable sections.
+LLMWiki Markdown roots. Native LLMWiki/OpenWiki means an already compiled
+projection; LLMWiki Markdown means a source-like wiki that can be served
+through the Markdown adapter. App vaults, graphs, workspaces, generic Markdown
+folders, and noisy example/demo/starter/e2e paths are treated as
+advanced/lower-priority candidates. They are hidden from the default
+quickstart selection list when at least one recommended source exists. Use
+`--include-additional` to render recommended and advanced/lower-priority
+candidates as separate selectable sections.
 If an app vault contains a strong direct child `wiki/` source, default
 quickstart presents the child as recommended and keeps the parent app vault in
-the additional section. If quickstart finds only additional candidates without
-`--include-additional`, it stops before selection and asks you to rerun with
-`--include-additional`.
+the advanced/lower-priority section. If quickstart finds only
+advanced/lower-priority candidates without `--include-additional`, it stops
+before selection and asks you to rerun with `--include-additional`.
 
 The scriptable `discover` command is inventory, not presentation. Within the
 directories it scans, it reports every candidate that meets its score threshold,
@@ -79,6 +82,10 @@ intentionally looking for plain Markdown folders. Broad scans still avoid
 dependency, cache, build, transient editor/download, and other infrastructure
 folders; pass an explicit `--path DIR` when you intentionally want to inspect a
 normally skipped area.
+
+Quickstart intentionally prints full local paths so users can distinguish
+candidate folders before starting servers. Redact or replace those paths before
+publishing screenshots, logs, docs, or issue reports.
 
 ## Supported Source Variants
 

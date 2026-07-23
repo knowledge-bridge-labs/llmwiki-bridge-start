@@ -379,14 +379,15 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     result.candidateSelection = summarizeQuickstartCandidateSelection(candidatePlan)
     if (!candidatePlan.visibleCandidates.length) {
       writeStatus(output, ui, 'skip', 'No recommended LLMWiki source folders found.')
-      output.write('Use --include-additional to include compatible app vaults, examples, and other lower-priority candidates.\n')
+      output.write('Use --include-additional to review advanced/lower-priority app vaults, examples, and generic Markdown candidates.\n')
       result.skipped.push('selection', 'start', 'bridge-setup', 'register', 'smoke')
       return result
     }
     writeStatus(output, ui, 'ok', formatQuickstartCandidateCount(candidatePlan))
+    writeStatus(output, ui, 'info', 'Recommended source types: Native LLMWiki/OpenWiki is a compiled projection; LLMWiki Markdown is a source-like wiki served by the Markdown adapter.')
     if (candidatePlan.hiddenAdditionalCount > 0) {
       const reasonText = formatAdditionalReasonCounts(candidatePlan.additionalReasonCounts)
-      writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} additional compatible candidate(s) hidden by default${reasonText ? ` (${reasonText})` : ''}. Use --include-additional to show app vaults, examples, demos, and starter/e2e sources.`)
+      writeStatus(output, ui, 'info', `${candidatePlan.hiddenAdditionalCount} advanced/lower-priority candidate(s) hidden by default${reasonText ? ` (${reasonText})` : ''}. Use --include-additional to review app vaults, examples, demos, starter/e2e sources, and generic Markdown candidates.`)
     }
     output.write(formatQuickstartCandidateGroups(candidatePlan.groups))
 
@@ -635,7 +636,7 @@ function planQuickstartCandidateSelection(candidates = [], options = {}) {
     const ranked = rankQuickstartCandidates(additional, nextRank, 'additional')
     groups.push({
       kind: 'additional',
-      title: recommended.length ? 'Additional compatible candidates' : 'Compatible candidates',
+      title: 'Advanced / lower-priority candidates',
       candidates: ranked,
     })
   }
@@ -745,10 +746,10 @@ function formatQuickstartReason(reason = '') {
 function formatQuickstartCandidateCount(plan) {
   const visible = plan.visibleCandidates.length
   if (plan.includeAdditional && plan.recommendedCount && plan.additionalCount) {
-    return `Found ${visible} candidate source folder(s): ${plan.recommendedCount} recommended and ${plan.additionalCount} additional.`
+    return `Found ${visible} candidate source folder(s): ${plan.recommendedCount} recommended and ${plan.additionalCount} advanced/lower-priority.`
   }
   if (plan.includeAdditional && !plan.recommendedCount) {
-    return `Found ${visible} compatible candidate source folder(s).`
+    return `Found ${visible} advanced/lower-priority candidate source folder(s).`
   }
   return `Found ${visible} recommended source folder(s).`
 }
@@ -2792,7 +2793,7 @@ Commands:
   smoke     Run a small bridge query; defaults to evidence-only.
   doctor    Check local tool and bridge readiness.
 
-Quickstart shows recommended LLMWiki source folders first; use --include-additional for app vaults, examples, demos, and starter/e2e sources.
+Quickstart shows recommended LLMWiki source folders first; use --include-additional for advanced/lower-priority app vaults, examples, demos, and starter/e2e sources.
 Discovery defaults to the current user's home directory and hides low-confidence generic folders.
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.

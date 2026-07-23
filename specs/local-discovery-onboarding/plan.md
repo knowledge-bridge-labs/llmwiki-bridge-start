@@ -21,9 +21,12 @@
    - Use a TTY-only checkbox multi-select for candidate source selection.
    - Keep the comma-separated numbered fallback for non-TTY, piped, injected
      prompt, and `--yes` runs.
-   - Split candidates into recommended and additional sections. Recommended is
-     Native LLMWiki/OpenWiki plus LLMWiki Markdown; app vaults, graphs,
-     workspaces, generic Markdown folders, and noisy paths are additional.
+   - Split candidates into recommended and advanced/lower-priority sections.
+     Recommended is Native LLMWiki/OpenWiki plus LLMWiki Markdown; app vaults,
+     graphs, workspaces, generic Markdown folders, and noisy paths are
+     advanced/lower-priority.
+   - Label non-recommended candidates as advanced/lower-priority and explain
+     the Native LLMWiki/OpenWiki vs LLMWiki Markdown distinction inline.
 9. Add a bridge smoke command that uses evidence-only mode by default and
    delegated-runtime when an explicit LLM endpoint is configured.
 10. Verify with unit tests, package dry-run, targeted local discovery, and a
@@ -36,19 +39,19 @@
   default, and rely on the score threshold rather than quickstart presentation
   categories to decide broad `discover` output for inspected directories.
   Generic matches that meet the selected threshold stay visible in `discover`
-  and are handled as additional candidates by quickstart.
+  and are handled as advanced/lower-priority candidates by quickstart.
 - App-style vault roots and nested `wiki/` projections can duplicate each other;
   keep both visible in scriptable `discover` when both meet the score threshold.
   In default quickstart, recommend a strong child `wiki/` source and place the
-  parent app vault in the additional section.
+  parent app vault in the advanced/lower-priority section.
 - Medium-confidence app markers can identify a vault that the installed
   `llmwiki-serve` cannot yet serve directly; keep marker confidence distinct
   from manifest validation.
 - Generic Markdown fallback and example/demo/starter/e2e paths can produce noisy
   quickstart choices; keep broad `discover` threshold-driven for inspected
-  directories, while default quickstart hides additional candidates unless
-  `--include-additional` is set. Keep traversal safety guards separate from
-  quickstart presentation filtering.
+  directories, while default quickstart hides advanced/lower-priority
+  candidates unless `--include-additional` is set. Keep traversal safety guards
+  separate from quickstart presentation filtering.
 - Existing bridge registry settings must not be overwritten accidentally.
 - Rich prompt libraries can break automation if used unconditionally; gate
   interactive prompts on TTY and keep fallback output snapshot-tested.
@@ -69,8 +72,10 @@
   threshold, including parent/child overlap.
 - Quickstart docs must say that recommended sources are Native
   LLMWiki/OpenWiki and LLMWiki Markdown, while app vaults, graphs, workspaces,
-  generic Markdown folders, and noisy paths are additional and visible through
-  `--include-additional`.
+  generic Markdown folders, and noisy paths are advanced/lower-priority and
+  visible through `--include-additional`.
+- Public docs and screenshots must redact local filesystem paths even though
+  the CLI prints full paths for local disambiguation.
 - Native classification docs must say that `review_state` or `wiki_title`
   alone are insufficient; stronger projection evidence such as
   `.wiki-compiler.json`, sidecar graph/projection metadata, or

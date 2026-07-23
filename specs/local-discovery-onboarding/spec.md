@@ -17,7 +17,8 @@ coding-agent client can retrieve evidence.
   scans: show every candidate that meets the selected score threshold,
   including parent/child overlap.
 - Keep quickstart source selection focused by presenting recommended sources
-  separately from additional app, workspace, graph, generic, and noisy paths.
+  separately from advanced/lower-priority app, workspace, graph, generic, and
+  noisy paths.
 - Validate candidates through `llmwiki-serve manifest` when requested.
 - Start selected local sources on loopback ports.
 - Treat started `llmwiki-serve` source URLs as immediately useful even when the
@@ -103,16 +104,18 @@ source server.
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
 - `quickstart` must keep the default source selection list focused on
   recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
-  LLMWiki Markdown roots. Compatible app vaults, graphs, workspaces, generic
-  Markdown folders, and noisy example/demo/starter/e2e candidates are
-  additional and require `--include-additional` when at least one recommended
-  source exists.
+  LLMWiki Markdown roots. Quickstart must explain that Native
+  LLMWiki/OpenWiki is an already compiled projection, while LLMWiki Markdown is
+  a source-like wiki served through the Markdown adapter. App vaults, graphs,
+  workspaces, generic Markdown folders, and noisy example/demo/starter/e2e
+  candidates are advanced/lower-priority and require `--include-additional`
+  when at least one recommended source exists.
 - If quickstart sees both an app vault root and a strong direct child `wiki/`
   source, default quickstart must recommend the child and keep the parent app
-  vault in the additional section.
-- If quickstart finds only additional candidates without `--include-additional`,
-  it must stop before selection, validation, or startup rather than selecting an
-  app vault or fixture by default.
+  vault in the advanced/lower-priority section.
+- If quickstart finds only advanced/lower-priority candidates without
+  `--include-additional`, it must stop before selection, validation, or startup
+  rather than selecting an app vault or fixture by default.
 - `quickstart` must support TTY checkbox-style multi-select source startup,
   preserve comma-separated text selection for non-TTY/automation, and allow a
   successful direct-source-only exit before bridge setup.
@@ -124,6 +127,9 @@ source server.
   source-start defaults, select the first candidate, and skip optional bridge
   setup unless `--setup-bridge` is also supplied.
 - Source URLs with credentials or unsupported schemes must be rejected.
+- Public screenshots, docs, and issue-report examples must redact full local
+  paths even though the CLI itself prints full paths for local source
+  disambiguation.
 - Tests must cover scoring, discover parent/child overlap transparency,
   quickstart recommended/additional presentation, supported-variant markers,
   default generic fallback behavior, manifest validation behavior where

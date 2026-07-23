@@ -35,7 +35,7 @@
   threshold, including app vault roots with strong direct child `wiki/` sources.
 - Quickstart app-root/direct child `wiki/` handling: strong direct child `wiki/`
   sources render as recommended, while the parent app vault renders in the
-  additional section and is hidden from default selection without
+  advanced/lower-priority section and is hidden from default selection without
   `--include-additional`.
 - Marker recognition for Obsidian, Logseq `config.edn`, Dendron, Foam, and
   Quartz source variants at the default discovery threshold, including exact
@@ -60,15 +60,18 @@
   scriptable listing command.
 - Quickstart direct-source-only path: discover approval, multi-select, validate,
   start, then skip bridge setup successfully while printing direct source URLs.
-- Quickstart default source selection hides additional app/generic/noisy
+- Quickstart default source selection hides advanced/lower-priority
+  app/generic/noisy
   candidates, keeps `all` scoped to the currently listed candidates, and
   validates/starts only recommended selections.
-- Quickstart `--include-additional` renders recommended and additional
-  candidates as separate sections, including app vaults, graphs, workspaces,
-  generic Markdown folders, and noisy paths, and allows selecting the
-  additional section.
-- Quickstart with only additional candidates stops before selection/validation
-  unless `--include-additional` is set.
+- Quickstart `--include-additional` renders recommended and
+  advanced/lower-priority candidates as separate sections, including app vaults,
+  graphs, workspaces, generic Markdown folders, and noisy paths, and allows
+  selecting the advanced section.
+- Quickstart explains that Native LLMWiki/OpenWiki is a compiled projection and
+  LLMWiki Markdown is a source-like wiki served by the Markdown adapter.
+- Quickstart with only advanced/lower-priority candidates stops before
+  selection/validation unless `--include-additional` is set.
 - Quickstart TTY source selection routes through the checkbox multi-select
   adapter, preselects the first candidate, and maps selected ranks to candidate
   paths.
