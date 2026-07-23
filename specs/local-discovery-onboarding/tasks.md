@@ -37,6 +37,9 @@
   mode selection, with evidence-only fallback when endpoint setup is skipped.
 - [x] Apply configured runtime endpoint/model/profile to an already running
   bridge through the settings API before delegated-runtime smoke.
+- [x] Make quickstart bridge registration select all newly started source IDs
+  and deselect stale selected sources while preserving unrelated registry
+  entries in merge mode.
 - [x] Validate runtime profiles as `generic`, `hermes`, or `deepagents` so
   yes/no answers cannot be silently consumed as invalid profile names.
 - [x] Scrub inherited runtime/API-key environment variables when bridge startup

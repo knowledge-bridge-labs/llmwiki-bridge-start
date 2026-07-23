@@ -114,6 +114,10 @@ source server.
   low-confidence generic fallback.
 - `register` must merge by default and require explicit `--replace` to wipe the
   bridge registry.
+- When `quickstart` registers started sources with the bridge, the newly
+  started sources must become the active selected set for bridge fan-out.
+  Existing unrelated bridge registry entries must be preserved in merge mode
+  but stale selected entries must be deselected.
 - Invoking `llmwiki-bridge-start` without a subcommand must start the
   quickstart flow; explicit `quickstart` remains equivalent and explicit
   `discover` remains available for scriptable candidate listing.

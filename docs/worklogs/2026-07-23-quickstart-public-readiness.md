@@ -109,6 +109,10 @@ onboarding harness.
   scrubs inherited runtime/API-key environment variables before spawning the
   bridge child process, so a skipped runtime setup cannot accidentally inherit
   local model credentials.
+- Follow-up on 2026-07-24: quickstart bridge registration now makes the newly
+  started source IDs the active selected set. Merge mode still preserves
+  unrelated registered sources, but stale selected sources are deselected so
+  bridge fan-out matches the user's current quickstart selection.
 - Follow-up on 2026-07-24: bridge background startup now uses `cross-spawn`
   for cross-platform command resolution instead of a hand-written Windows
   `cmd.exe` wrapper.
@@ -177,10 +181,13 @@ onboarding harness.
   - invalid runtime profiles rejected instead of being silently accepted
   - evidence-only skip disables inherited runtime env detection
   - evidence-only bridge startup scrubs inherited runtime/API-key env values
+  - selected-ID registry override covered so stale selected sources do not
+    remain active after quickstart merge registration
   - Windows `.cmd` bridge commands are passed directly to the cross-platform
     spawn adapter without a `cmd.exe` wrapper
-  - targeted runtime/bridge/quickstart/env test subset passed with 75 tests
-  - `npm run check` passed with 75 Node tests plus package dry-run
+  - targeted runtime/bridge/quickstart/env/register test subset passed with 76
+    tests
+  - `npm run check` passed with 76 Node tests plus package dry-run
 
 ## Commits
 

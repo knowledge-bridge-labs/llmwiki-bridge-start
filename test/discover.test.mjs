@@ -1343,6 +1343,7 @@ test('quickstart registers started sources after starting bridge and passing hea
   assert.equal(calls.find((call) => call[0] === 'bridge-start')[2].runtime.configured, true)
   assert.equal(calls.find((call) => call[0] === 'bridge-start')[2].runtime.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
+  assert.deepEqual([...calls.find((call) => call[0] === 'register')[1].selectedIds], ['first-wiki'])
   assert.equal(calls.find((call) => call[0] === 'register')[1].configPath, result.started.configPath)
   assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
   assert.deepEqual(result.skipped, [])
@@ -2555,6 +2556,98 @@ test('mergeBridgeSources upserts by stable id when a source moves ports', () => 
   assert.equal(merged.length, 1)
   assert.equal(merged[0].name, 'New')
   assert.equal(merged[0].url, 'http://127.0.0.1:11101')
+})
+
+test('registerSources selectedIds selects only requested sources while preserving stale entries', async (t) => {
+  const configPath = join(mkdtempSync(join(tmpdir(), 'llmwiki-register-selected-')), 'sources.json')
+  writeFileSync(configPath, JSON.stringify({
+    version: 1,
+    sources: [
+      {
+        id: 'wiki-index',
+        name: 'Wiki Index',
+        title: 'Wiki Index',
+        protocol: 'llmwiki-http',
+        status: 'ready',
+        selected: true,
+        url: 'http://127.0.0.1:11001',
+      },
+      {
+        id: 'onharu-wiki-index',
+        name: 'Onharu Wiki Index',
+        title: 'Onharu Wiki Index',
+        protocol: 'llmwiki-http',
+        status: 'ready',
+        selected: false,
+        url: 'http://127.0.0.1:11002',
+      },
+    ],
+  }))
+
+  let savedPayload = null
+  const server = createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/settings/sources.json') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        sources: [
+          {
+            id: 'local-sample',
+            name: 'Local sample LLMWiki',
+            title: 'Local sample LLMWiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:8765',
+          },
+          {
+            id: 'wiki-index',
+            name: 'Old Wiki Index',
+            title: 'Old Wiki Index',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: false,
+            url: 'http://127.0.0.1:19999',
+          },
+        ],
+      }))
+      return
+    }
+    if (request.method === 'PUT' && request.url === '/settings/sources.json') {
+      let raw = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk) => {
+        raw += chunk
+      })
+      request.on('end', () => {
+        savedPayload = JSON.parse(raw)
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ status: 'saved', sources: savedPayload.sources }))
+      })
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'not found' }))
+  })
+  await new Promise((resolveListen) => {
+    server.listen(0, '127.0.0.1', resolveListen)
+  })
+  t.after(() => {
+    server.close()
+  })
+
+  const address = server.address()
+  const result = await registerSources({
+    bridgeUrl: `http://127.0.0.1:${address.port}`,
+    configPath,
+    selectedIds: new Set(['wiki-index', 'onharu-wiki-index']),
+  })
+
+  assert.equal(result.payload.sources.length, 3)
+  assert.equal(savedPayload.sources.find((source) => source.id === 'local-sample').selected, false)
+  assert.equal(savedPayload.sources.find((source) => source.id === 'wiki-index').selected, true)
+  assert.equal(savedPayload.sources.find((source) => source.id === 'onharu-wiki-index').selected, true)
+  assert.equal(savedPayload.sources.find((source) => source.id === 'wiki-index').url, 'http://127.0.0.1:11001')
+  assert.equal(savedPayload.sources.find((source) => source.id === 'local-sample').url, 'http://127.0.0.1:8765')
 })
 
 test('registerSources rejects source URLs with credentials before contacting bridge', async () => {

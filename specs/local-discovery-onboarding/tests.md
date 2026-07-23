@@ -138,6 +138,9 @@
   no explicit endpoint is configured.
 - Bridge registry upsert by URL.
 - Bridge registry upsert by stable ID when source ports move.
+- Bridge registry selected-ID override: quickstart/register merge preserves
+  unrelated registered entries but selects only the requested active source IDs
+  so stale selected sources do not participate in bridge fan-out.
 - Credential-bearing source URL rejection.
 - `npm run check`, including syntax checks, Node tests, and package dry-run.
 

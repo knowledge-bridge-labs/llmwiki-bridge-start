@@ -558,6 +558,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     result.registered = await runtime.registerSources({
       bridgeUrl,
       configPath,
+      selectedIds: new Set(result.started.sources.map((source) => source.id)),
       replace: boolOption(options.replace),
     })
     writeStatus(output, ui, 'ok', `Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.`)
@@ -3013,7 +3014,7 @@ export async function registerSources({ bridgeUrl = DEFAULT_BRIDGE_URL, configPa
   }))
 
   const existing = replace ? [] : await readExistingBridgeSources(bridgeUrl)
-  const merged = mergeBridgeSources(existing, normalized)
+  const merged = applySelectedIds(mergeBridgeSources(existing, normalized), selectedIds)
 
   const payload = { sources: merged }
   const response = await fetchJson(new URL('/settings/sources.json', bridgeUrl), {
@@ -3023,6 +3024,17 @@ export async function registerSources({ bridgeUrl = DEFAULT_BRIDGE_URL, configPa
     timeoutMs: 10000,
   })
   return { bridgeUrl, replace, payload, response }
+}
+
+function applySelectedIds(sources, selectedIds = new Set()) {
+  if (!selectedIds?.size) {
+    return sources
+  }
+  const normalizedIds = new Set([...selectedIds].map(String))
+  return sources.map((source) => ({
+    ...source,
+    selected: normalizedIds.has(source.id),
+  }))
 }
 
 function normalizeBridgeSource(source, { selected = false } = {}) {
