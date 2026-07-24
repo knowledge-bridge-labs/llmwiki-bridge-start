@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, select as clackSelect, spinner as clackSpinner } from '@clack/prompts'
@@ -85,6 +85,15 @@ const RUNTIME_INSTALLER_ENV_ALLOWLIST = new Set([
   'SHELL',
   'TERM',
   'LANG',
+])
+const BROAD_POSIX_INSTALLER_BIN_DIRS = new Set([
+  '/bin',
+  '/sbin',
+  '/usr/bin',
+  '/usr/sbin',
+  '/usr/local/bin',
+  '/usr/local/sbin',
+  '/opt/homebrew/bin',
 ])
 const RUNTIME_SETUP_SKIP = 'skip'
 const RUNTIME_SETUP_EXISTING = 'existing'
@@ -1287,14 +1296,90 @@ export async function downloadRuntimeInstallerScript(url, destination, { timeout
   }
 }
 
-function scrubInstallerEnv(env = process.env) {
+export function scrubInstallerEnv(env = process.env) {
   const clean = {}
   for (const [key, value] of Object.entries(env || {})) {
     if (RUNTIME_INSTALLER_ENV_ALLOWLIST.has(key) || key.startsWith('LC_')) {
       clean[key] = value
     }
   }
+  prependInstallerUserBinDirs(clean)
   return clean
+}
+
+function prependInstallerUserBinDirs(env) {
+  const binDirs = installerUserBinDirs(env)
+  if (!binDirs.length) {
+    return env
+  }
+  const pathKeys = ['PATH', 'Path'].filter((key) => Object.hasOwn(env, key))
+  if (!pathKeys.length) {
+    pathKeys.push('PATH')
+  }
+  for (const key of pathKeys) {
+    env[key] = prependUniquePathEntries(env[key], binDirs)
+  }
+  return env
+}
+
+function installerUserBinDirs(env) {
+  const candidates = []
+  if (safeInstallerBasePath(env.HOME)) {
+    candidates.push(join(env.HOME, '.local', 'bin'))
+    candidates.push(join(env.HOME, 'bin'))
+    candidates.push(join(env.HOME, '.bin'))
+  }
+  if (safeInstallerBasePath(env.XDG_DATA_HOME)) {
+    candidates.push(join(dirname(env.XDG_DATA_HOME), 'bin'))
+  }
+  return uniqueInstallerPathEntries(candidates)
+}
+
+function safeInstallerBasePath(value) {
+  return typeof value === 'string' && value.length > 0 && isAbsolute(value) && dirname(value) !== value
+}
+
+function prependUniquePathEntries(existingValue, prependEntries) {
+  const existing = typeof existingValue === 'string' && existingValue.length > 0
+    ? existingValue.split(delimiter)
+    : []
+  const seen = new Set(existing.map(installerPathKey).filter(Boolean))
+  const additions = []
+  for (const entry of prependEntries) {
+    const key = installerPathKey(entry)
+    if (!key || seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    additions.push(entry)
+  }
+  return [...additions, ...existing].join(delimiter)
+}
+
+function uniqueInstallerPathEntries(entries) {
+  const seen = new Set()
+  const unique = []
+  for (const entry of entries) {
+    const key = installerPathKey(entry)
+    if (!key || seen.has(key) || isBroadInstallerBinDir(entry)) {
+      continue
+    }
+    seen.add(key)
+    unique.push(entry)
+  }
+  return unique
+}
+
+function installerPathKey(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return ''
+  }
+  const normalized = normalize(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function isBroadInstallerBinDir(value) {
+  return process.platform !== 'win32' && BROAD_POSIX_INSTALLER_BIN_DIRS.has(installerPathKey(value))
 }
 
 function safeLogToken(value) {

@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 import { cursor as ansiCursor, erase as ansiErase } from 'sisteransi'
 
-import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, downloadRuntimeInstallerScript, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, runRuntimeInstallPlan, runtimeInstallPlan, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
+import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, downloadRuntimeInstallerScript, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, runRuntimeInstallPlan, runtimeInstallPlan, scanCandidateDirectories, scoreCandidate, scrubInstallerEnv, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -3039,8 +3039,62 @@ test('runtimeInstallPlan uses official OS-specific installer allowlist', () => {
   assert.match(deepAgentsUnsupported.reason, /not enabled by this allowlist/)
 })
 
+test('scrubInstallerEnv prepends HOME and XDG user bins without leaking secrets', () => {
+  const home = join(tmpdir(), 'llmwiki-installer-home')
+  const xdgDataHome = join(tmpdir(), 'llmwiki-installer-xdg', 'share')
+
+  const clean = scrubInstallerEnv({
+    PATH: 'safe-path',
+    HOME: home,
+    XDG_DATA_HOME: xdgDataHome,
+    LC_ALL: 'C',
+    PWD: process.cwd(),
+    OPENAI_API_KEY: 'secret-openai',
+    ANTHROPIC_API_KEY: 'secret-anthropic',
+    HERMES_BASE_URL: 'http://private-hermes.example.invalid/v1',
+  })
+
+  assert.deepEqual(clean.PATH.split(delimiter), [
+    join(home, '.local', 'bin'),
+    join(home, 'bin'),
+    join(home, '.bin'),
+    join(tmpdir(), 'llmwiki-installer-xdg', 'bin'),
+    'safe-path',
+  ])
+  assert.equal(clean.HOME, home)
+  assert.equal(clean.XDG_DATA_HOME, xdgDataHome)
+  assert.equal(clean.LC_ALL, 'C')
+  assert.equal(clean.PWD, undefined)
+  assert.equal(clean.OPENAI_API_KEY, undefined)
+  assert.equal(clean.ANTHROPIC_API_KEY, undefined)
+  assert.equal(clean.HERMES_BASE_URL, undefined)
+})
+
+test('scrubInstallerEnv avoids duplicate user bins and preserves Path casing', () => {
+  const home = join(tmpdir(), 'llmwiki-installer-home-dupe')
+  const homeLocalBin = join(home, '.local', 'bin')
+  const existingToolBin = join(home, 'tools', 'bin')
+
+  const clean = scrubInstallerEnv({
+    Path: [homeLocalBin, existingToolBin].join(delimiter),
+    HOME: home,
+    XDG_DATA_HOME: join(home, '.local', 'share'),
+  })
+
+  assert.equal(clean.PATH, undefined)
+  assert.deepEqual(clean.Path.split(delimiter), [
+    join(home, 'bin'),
+    join(home, '.bin'),
+    homeLocalBin,
+    existingToolBin,
+  ])
+  assert.equal(clean.Path.split(delimiter).filter((entry) => entry === homeLocalBin).length, 1)
+})
+
 test('runRuntimeInstallPlan downloads official script, runs fixed argv, scrubs env, and writes logs', async () => {
   const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-runtime-install-'))
+  const home = join(logDir, 'home')
+  const xdgDataHome = join(logDir, 'xdg', 'share')
   const calls = []
   const plan = {
     runtime: 'hermes',
@@ -3056,7 +3110,8 @@ test('runRuntimeInstallPlan downloads official script, runs fixed argv, scrubs e
     logDir,
     env: {
       PATH: 'safe-path',
-      HOME: '/safe/home',
+      HOME: home,
+      XDG_DATA_HOME: xdgDataHome,
       LC_ALL: 'C',
       KEEP_ME: 'drop-me',
       OPENAI_API_KEY: 'secret-openai',
@@ -3087,8 +3142,15 @@ test('runRuntimeInstallPlan downloads official script, runs fixed argv, scrubs e
   assert.equal(download.url, 'https://hermes-agent.nousresearch.com/install.sh')
   assert.equal(run.command, 'bash')
   assert.deepEqual(run.args, [download.destination])
-  assert.equal(run.options.env.PATH, 'safe-path')
-  assert.equal(run.options.env.HOME, '/safe/home')
+  assert.deepEqual(run.options.env.PATH.split(delimiter), [
+    join(home, '.local', 'bin'),
+    join(home, 'bin'),
+    join(home, '.bin'),
+    join(logDir, 'xdg', 'bin'),
+    'safe-path',
+  ])
+  assert.equal(run.options.env.HOME, home)
+  assert.equal(run.options.env.XDG_DATA_HOME, xdgDataHome)
   assert.equal(run.options.env.LC_ALL, 'C')
   assert.equal(run.options.env.KEEP_ME, undefined)
   assert.equal(run.options.env.OPENAI_API_KEY, undefined)
