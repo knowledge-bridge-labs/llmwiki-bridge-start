@@ -144,6 +144,17 @@
   configured.
 - Runtime endpoint prompts use a shown default when the user presses blank
   Enter, and accept `skip` to force evidence-only even when a default exists.
+- Runtime setup ignores legacy/user-local `HERMES_BASE_URL`,
+  `DEEPAGENTS_BASE_URL`, and `OPENAI_BASE_URL` as first-run defaults; only
+  explicit flags, `LLMWIKI_AGENT_BRIDGE_BASE_URL`, or framework-supported health
+  detection may provide a default.
+- Hermes runtime setup verifies endpoint readiness through `/health` or
+  `/v1/health` before bridge runtime configuration; failed health checks fall
+  back to evidence-only.
+- Runtime framework inspection uses framework-supported install checks:
+  `hermes --version` for Hermes and `dcode --version` for DeepAgents Code.
+  DeepAgents inspection must not infer a local bridge runtime endpoint without
+  a supported endpoint discovery contract.
 - Runtime setup skip/evidence-only disables inherited runtime env detection for
   the quickstart bridge smoke path.
 - Evidence-only or unconfigured bridge startup scrubs inherited runtime/API-key

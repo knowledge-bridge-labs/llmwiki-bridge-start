@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
+import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -1730,6 +1730,33 @@ test('quickstart registers started sources after starting bridge and passing hea
         calls.push(['bridge-wait', bridgeUrl, args])
         return { ok: true, status: 'ok', url: bridgeUrl }
       },
+      async probeRuntimeEndpoint(args) {
+        calls.push(['runtime-probe', args])
+        return args.baseUrl === 'http://127.0.0.1:9999/v1'
+          ? { ok: true, profile: args.profile, baseUrl: args.baseUrl, url: 'http://127.0.0.1:9999/health', status: 'ok' }
+          : { ok: false, profile: args.profile, baseUrl: args.baseUrl, error: 'not running' }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: true,
+          version: '1.2.3',
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [
+            { name: 'version', displayCommand: 'hermes --version', ok: true },
+            { name: 'status', displayCommand: 'hermes status', ok: true },
+            { name: 'doctor', displayCommand: 'hermes doctor', ok: true },
+          ],
+          runtime: { ok: true, baseUrl: 'http://127.0.0.1:9999/v1', url: 'http://127.0.0.1:9999/health' },
+          endpointDefault: {
+            value: 'http://127.0.0.1:9999/v1',
+            source: 'Hermes /health',
+            verified: true,
+            health: { ok: true, baseUrl: 'http://127.0.0.1:9999/v1', url: 'http://127.0.0.1:9999/health', status: 'ok' },
+          },
+        }
+      },
       async registerSources(args) {
         calls.push(['register', args])
         return {
@@ -1761,7 +1788,7 @@ test('quickstart registers started sources after starting bridge and passing hea
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan', 'bridge-start', 'bridge-wait', 'register', 'smoke-mode', 'smoke'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'framework', 'runtime-probe', 'bridge-health', 'bridge-plan', 'bridge-start', 'bridge-wait', 'register', 'smoke-mode', 'smoke'])
   assert.equal(result.bridgeSetup.executed, true)
   assert.equal(result.bridgeSetup.continueToBridge, true)
   assert.equal(result.bridgeSetup.health.ok, true)
@@ -1857,19 +1884,27 @@ test('quickstart prints final bridge handoff after successful smoke', async () =
 
 test('quickstart applies Hermes runtime settings to an already running bridge', async (t) => {
   const previousHermesBaseUrl = process.env.HERMES_BASE_URL
+  const previousHermesModel = process.env.HERMES_MODEL
   t.after(() => {
     if (previousHermesBaseUrl === undefined) {
       delete process.env.HERMES_BASE_URL
     } else {
       process.env.HERMES_BASE_URL = previousHermesBaseUrl
     }
+    if (previousHermesModel === undefined) {
+      delete process.env.HERMES_MODEL
+    } else {
+      process.env.HERMES_MODEL = previousHermesModel
+    }
   })
-  process.env.HERMES_BASE_URL = 'http://127.0.0.1:8642/v1'
+  process.env.HERMES_BASE_URL = 'http://legacy-hermes-env.example.invalid:8642/v1'
+  process.env.HERMES_MODEL = 'pc-custom-hermes-model'
 
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '2', '', '']
+  const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:9999/v1', '']
   const prompts = []
+  const endpointPromptSnapshots = []
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1878,6 +1913,9 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
       stderr: stdout,
       async prompt(question) {
         prompts.push(question)
+        if (/Hermes runtime base URL/.test(question)) {
+          endpointPromptSnapshots.push(stdout.text)
+        }
         return answers.shift()
       },
     },
@@ -1913,6 +1951,32 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
         calls.push(['configure-runtime', args])
         return { ok: true, skipped: false, response: { status: 'saved', applied: ['runtimeProfile', 'baseUrl', 'model'] } }
       },
+      async probeRuntimeEndpoint(args) {
+        calls.push(['runtime-probe', args])
+        return args.baseUrl === 'http://127.0.0.1:9999/v1'
+          ? { ok: true, profile: args.profile, baseUrl: args.baseUrl, url: 'http://127.0.0.1:9999/health', status: 'ok' }
+          : { ok: false, profile: args.profile, baseUrl: args.baseUrl, error: 'not running' }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: true,
+          version: '1.2.3',
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [
+            { name: 'version', displayCommand: 'hermes --version', ok: true },
+            { name: 'status', displayCommand: 'hermes status', ok: true },
+            { name: 'doctor', displayCommand: 'hermes doctor', ok: true },
+          ],
+          runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+          endpointDefault: {
+            value: '',
+            source: '',
+            probes: [{ baseUrl: 'http://127.0.0.1:8642/v1', source: 'Hermes /health', health: { ok: false, error: 'not running' } }],
+          },
+        }
+      },
       async registerSources(args) {
         calls.push(['register', args])
         return {
@@ -1923,7 +1987,7 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
       },
       async selectBridgeSmokeMode(args) {
         calls.push(['smoke-mode', args])
-        assert.equal(args.options.llmEndpoint, 'http://127.0.0.1:8642/v1')
+        assert.equal(args.options.llmEndpoint, 'http://127.0.0.1:9999/v1')
         assert.equal(args.options.llmModel, 'hermes-agent')
         assert.equal(args.options.runtimeProfile, 'hermes')
         return { mode: 'delegated-runtime', reason: 'test Hermes runtime configured' }
@@ -1935,19 +1999,29 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'configure-runtime', 'register', 'smoke-mode', 'smoke'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'framework', 'runtime-probe', 'bridge-health', 'configure-runtime', 'register', 'smoke-mode', 'smoke'])
   assert.equal(result.runtimeSetup.configured, true)
   assert.equal(result.runtimeSetup.profile, 'hermes')
   assert.equal(result.runtimeSetup.model, 'hermes-agent')
   assert.equal(result.bridgeSetup.executed, false)
   assert.equal(result.bridgeSetup.runtimeConfiguration.ok, true)
   assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.profile, 'hermes')
-  assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.baseUrl, 'http://127.0.0.1:8642/v1')
+  assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
   assert.match(stdout.text, /Registered 1 total bridge source\(s\); 1 selected for this quickstart/)
   assert.match(stdout.text, /No repo-confirmed auto-install command for Hermes was found/)
+  assert.match(stdout.text, /Hermes install: `hermes --version` detected/)
+  assert.match(stdout.text, /Hermes supported checks: status ok; doctor ok/)
+  assert.doesNotMatch(stdout.text, /hermes config show --json/)
+  assert.match(stdout.text, /Hermes runtime: CLI is installed, but no supported API health endpoint responded/)
+  assert.match(stdout.text, /Hermes health check passed: http:\/\/127\.0\.0\.1:9999\/health/)
   assert.match(stdout.text, /Applying runtime settings to the running bridge/)
-  assert(prompts.some((prompt) => /Hermes runtime base URL \(OpenAI-compatible; press Enter to use http:\/\/127\.0\.0\.1:8642\/v1, or type skip for evidence-only\)/.test(prompt)))
+  assert(prompts.some((prompt) => /Hermes runtime base URL \(OpenAI-compatible, e\.g\. http:\/\/127\.0\.0\.1:8642\/v1; press Enter or type skip to continue evidence-only\)/.test(prompt)))
+  assert(endpointPromptSnapshots.some((snapshot) => /Hermes install: `hermes --version` detected/.test(snapshot)))
+  assert(endpointPromptSnapshots.some((snapshot) => /Hermes runtime: CLI is installed, but no supported API health endpoint responded/.test(snapshot)))
+  assert(!stdout.text.includes('legacy-hermes-env.example.invalid'))
+  assert(!prompts.join('\n').includes('legacy-hermes-env.example.invalid'))
+  assert(!stdout.text.includes('pc-custom-hermes-model'))
 })
 
 test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-install', async () => {
@@ -1955,6 +2029,7 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', '3', 'skip', 'n', 'n']
   const prompts = []
+  const endpointPromptSnapshots = []
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1963,6 +2038,9 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
       stderr: stdout,
       async prompt(question) {
         prompts.push(question)
+        if (/DeepAgents runtime base URL/.test(question)) {
+          endpointPromptSnapshots.push(stdout.text)
+        }
         return answers.shift()
       },
     },
@@ -1998,6 +2076,31 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
         calls.push(['bridge-plan', args])
         return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
       },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'deepagents',
+          supported: true,
+          command: 'dcode',
+          installed: false,
+          installCheck: { displayCommand: 'dcode --version' },
+          checks: [
+            { name: 'version', displayCommand: 'dcode --version', ok: false, error: 'CLI not detected' },
+            { name: 'doctor', displayCommand: 'dcode doctor', ok: false, skipped: true },
+            { name: 'config', displayCommand: 'dcode config show --json', ok: false, skipped: true },
+          ],
+          runtime: {
+            ok: false,
+            skipped: true,
+            reason: 'DeepAgents Code has supported CLI diagnostics, but no registered local OpenAI-compatible runtime endpoint discovery contract in quickstart.',
+          },
+          endpointDefault: { value: '', source: '' },
+          docs: {
+            overview: 'https://docs.langchain.com/oss/python/deepagents/code/overview',
+            configuration: 'https://docs.langchain.com/oss/python/deepagents/code/configuration',
+          },
+        }
+      },
       async startBridgeCommand(plan, args) {
         calls.push(['bridge-start', plan, args])
         throw new Error('bridge command should not run when background start is declined')
@@ -2013,7 +2116,7 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'framework', 'bridge-health', 'bridge-plan'])
   assert.equal(result.runtimeSetup.choice, 'deepagents')
   assert.equal(result.runtimeSetup.configured, false)
   assert.equal(result.runtimeSetup.fallback, 'evidence-only')
@@ -2024,10 +2127,13 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
   assert.match(stdout.text, /DeepAgents/)
   assert.doesNotMatch(stdout.text, /existing LLM endpoint/)
   assert.doesNotMatch(stdout.text, /\n  4\)/)
-  assert.match(stdout.text, /No repo-confirmed auto-install command for DeepAgents was found/)
+  assert.match(stdout.text, /No repo-confirmed auto-install command for DeepAgents Code was found/)
+  assert.match(stdout.text, /DeepAgents Code install: `dcode --version` was not detected on PATH/)
+  assert.match(stdout.text, /DeepAgents Code runtime: no supported OpenAI-compatible local endpoint discovery method is recorded/)
   assert.match(stdout.text, /--runtime-profile deepagents/)
   assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
-  assert(prompts.some((prompt) => /DeepAgents runtime base URL \(OpenAI-compatible, e\.g\. http:\/\/127\.0\.0\.1:8642\/v1; press Enter or type skip to continue evidence-only\)/.test(prompt)))
+  assert.doesNotMatch(stdout.text, /Start DeepAgents so it exposes an OpenAI-compatible endpoint/)
+  assert(prompts.some((prompt) => /Optional bridge runtime base URL \(OpenAI-compatible; DeepAgents is checked via dcode, but no DeepAgents endpoint is inferred; press Enter or type skip to continue evidence-only\)/.test(prompt)))
 })
 
 test('startBridgeCommand delegates Windows .cmd bridge commands directly to cross-platform spawn adapter', () => {
@@ -2270,6 +2376,22 @@ test('detectLlmRuntime enables delegated-runtime when an LLM endpoint is configu
   const disabled = detectLlmRuntime({ noLlmRuntime: true }, { LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1' })
   assert.equal(disabled.configured, false)
   assert.equal(disabled.disabled, true)
+
+  const legacyOnly = detectLlmRuntime({}, {
+    HERMES_BASE_URL: 'http://legacy-hermes-env.example.invalid:8642/v1',
+    HERMES_MODEL: 'pc-custom-hermes-model',
+    DEEPAGENTS_BASE_URL: 'http://127.0.0.1:9998/v1',
+    OPENAI_BASE_URL: 'http://127.0.0.1:9997/v1',
+  })
+  assert.equal(legacyOnly.configured, false)
+
+  const standardEnv = detectLlmRuntime({}, {
+    LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1',
+    LLMWIKI_AGENT_BRIDGE_MODEL: 'bridge-model',
+  })
+  assert.equal(standardEnv.configured, true)
+  assert.equal(standardEnv.baseUrl, 'http://127.0.0.1:8642/v1')
+  assert.equal(standardEnv.model, 'bridge-model')
 })
 
 test('selectBridgeSmokeMode uses delegated only when runtime is explicit or bridge settings are configured', async () => {
@@ -2286,6 +2408,12 @@ test('selectBridgeSmokeMode uses delegated only when runtime is explicit or brid
     },
   })
   assert.equal(delegatedFromEnv.mode, 'delegated-runtime')
+
+  const legacyEnv = await selectBridgeSmokeMode({
+    env: { HERMES_BASE_URL: 'http://legacy-hermes-env.example.invalid:8642/v1' },
+    inspectBridgeRuntime: async () => ({ configured: false, reason: 'no explicit LLM endpoint detected in bridge settings' }),
+  })
+  assert.equal(legacyEnv.mode, 'evidence-only')
 
   const skippedRuntime = await selectBridgeSmokeMode({
     options: { noLlmRuntime: true },
@@ -2304,6 +2432,144 @@ test('selectBridgeSmokeMode uses delegated only when runtime is explicit or brid
 
   const forced = await selectBridgeSmokeMode({ options: { mode: 'hybrid' }, env: {} })
   assert.equal(forced.mode, 'hybrid')
+})
+
+test('probeRuntimeEndpoint verifies Hermes /health and /v1/health without env defaults', async () => {
+  const fetchCalls = []
+  const result = await probeRuntimeEndpoint({
+    baseUrl: 'http://127.0.0.1:8642/v1',
+    profile: 'hermes',
+    async fetchJson(url) {
+      fetchCalls.push(String(url))
+      if (String(url) === 'http://127.0.0.1:8642/v1/health') {
+        return { status: 'ready' }
+      }
+      throw new Error('not found')
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.url, 'http://127.0.0.1:8642/v1/health')
+  assert.equal(result.status, 'ready')
+  assert.deepEqual(fetchCalls, [
+    'http://127.0.0.1:8642/health',
+    'http://127.0.0.1:8642/v1/health',
+  ])
+
+  const generic = await probeRuntimeEndpoint({
+    baseUrl: 'http://127.0.0.1:8642/v1',
+    profile: 'deepagents',
+    async fetchJson() {
+      throw new Error('DeepAgents probe should not call network health endpoints')
+    },
+  })
+  assert.equal(generic.ok, true)
+  assert.equal(generic.skipped, true)
+  assert.match(generic.reason, /no registered framework health probe/)
+})
+
+test('inspectRuntimeFramework checks Hermes with supported CLI and health probe', async () => {
+  const calls = []
+  const result = await inspectRuntimeFramework({
+    choice: { id: 'hermes', profile: 'hermes' },
+    env: {
+      HERMES_BASE_URL: 'http://legacy-hermes-env.example.invalid:8642/v1',
+      OPENAI_BASE_URL: 'http://legacy-openai-env.example.invalid/v1',
+    },
+    async commandRunner(command, args, options) {
+      calls.push(['command', command, args, options])
+      assert.equal(command, 'hermes')
+      assert.equal(options.timeoutMs, 1500)
+      assert.equal(options.maxBuffer, 64 * 1024)
+      if (args[0] === '--version') {
+        return { status: 0, stdout: 'hermes 1.2.3\n', stderr: '' }
+      }
+      if (args[0] === 'status') {
+        return { status: 0, stdout: 'Hermes status ok\n', stderr: '' }
+      }
+      if (args[0] === 'doctor') {
+        return { status: 0, stdout: 'Hermes doctor ok\n', stderr: '' }
+      }
+      throw new Error(`unexpected Hermes command: ${args.join(' ')}`)
+    },
+    async probe(args) {
+      calls.push(['probe', args])
+      assert.equal(args.baseUrl, 'http://127.0.0.1:8642/v1')
+      assert.equal(args.profile, 'hermes')
+      return { ok: true, baseUrl: args.baseUrl, profile: args.profile, url: 'http://127.0.0.1:8642/health', status: 'ok' }
+    },
+  })
+
+  assert.equal(result.framework, 'hermes')
+  assert.equal(result.supported, true)
+  assert.equal(result.installed, true)
+  assert.equal(result.version, '1.2.3')
+  assert.equal(result.installCheck.displayCommand, 'hermes --version')
+  assert.equal(result.runtime.ok, true)
+  assert.equal(result.endpointDefault.value, 'http://127.0.0.1:8642/v1')
+  assert.equal(result.endpointDefault.verified, true)
+  assert(!JSON.stringify(result).includes('api_key'))
+  assert(!JSON.stringify(result).includes('"secret"'))
+  assert(!JSON.stringify(result).includes('legacy-hermes-env.example.invalid'))
+  assert(!JSON.stringify(result).includes('legacy-openai-env.example.invalid'))
+  assert.deepEqual(calls.map((call) => call[0]), ['command', 'command', 'command', 'probe'])
+  assert.deepEqual(calls.filter((call) => call[0] === 'command').map((call) => call[2]), [
+    ['--version'],
+    ['status'],
+    ['doctor'],
+  ])
+})
+
+test('inspectRuntimeFramework checks DeepAgents with supported dcode CLI without endpoint inference', async () => {
+  const calls = []
+  const result = await inspectRuntimeFramework({
+    choice: { id: 'deepagents', profile: 'deepagents' },
+    env: {
+      DEEPAGENTS_BASE_URL: 'http://legacy-deepagents-env.example.invalid/v1',
+      OPENAI_BASE_URL: 'http://legacy-openai-env.example.invalid/v1',
+    },
+    async commandRunner(command, args, options) {
+      calls.push(['command', command, args, options])
+      assert.equal(command, 'dcode')
+      assert.equal(options.timeoutMs, 1500)
+      assert.equal(options.maxBuffer, 64 * 1024)
+      if (args[0] === '--version') {
+        return { status: 0, stdout: 'dcode 0.4.5\n', stderr: '' }
+      }
+      if (args[0] === 'doctor') {
+        return { status: 0, stdout: 'DeepAgents doctor ok\n', stderr: '' }
+      }
+      if (args.join(' ') === 'config show --json') {
+        return { status: 0, stdout: JSON.stringify({ model: 'openai:gpt-5.5', endpoint: 'http://from-dcode-config.example.invalid/v1', api_key: 'secret' }), stderr: '' }
+      }
+      throw new Error(`unexpected DeepAgents command: ${args.join(' ')}`)
+    },
+    async probe() {
+      throw new Error('DeepAgents inspection should not infer an endpoint through Hermes-style health probing')
+    },
+  })
+
+  assert.equal(result.framework, 'deepagents')
+  assert.equal(result.supported, true)
+  assert.equal(result.installed, true)
+  assert.equal(result.version, '0.4.5')
+  assert.equal(result.installCheck.displayCommand, 'dcode --version')
+  assert.equal(result.runtime.ok, false)
+  assert.equal(result.runtime.skipped, true)
+  assert.match(result.runtime.reason, /no registered local OpenAI-compatible runtime endpoint discovery contract/)
+  assert.equal(result.endpointDefault.value, '')
+  assert.equal(result.checks.find((check) => check.name === 'config').safeConfig.ok, false)
+  assert(!JSON.stringify(result).includes('api_key'))
+  assert(!JSON.stringify(result).includes('"secret"'))
+  assert(!JSON.stringify(result).includes('from-dcode-config.example.invalid'))
+  assert(!JSON.stringify(result).includes('legacy-deepagents-env.example.invalid'))
+  assert(!JSON.stringify(result).includes('legacy-openai-env.example.invalid'))
+  assert.deepEqual(calls.map((call) => call[0]), ['command', 'command', 'command'])
+  assert.deepEqual(calls.map((call) => call[2]), [
+    ['--version'],
+    ['doctor'],
+    ['config', 'show', '--json'],
+  ])
 })
 
 test('configureBridgeRuntime saves only runtime connection fields', async (t) => {

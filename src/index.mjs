@@ -27,6 +27,8 @@ const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
 const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
+const DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS = 1500
+const RUNTIME_FRAMEWORK_COMMAND_MAX_BUFFER = 64 * 1024
 const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
 const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
@@ -383,6 +385,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     smokeBridge,
     resolveServeInvocation,
     checkBridgeHealth,
+    probeRuntimeEndpoint,
+    inspectRuntimeFramework,
     bridgeStartPlan,
     startBridgeCommand,
     waitForBridgeHealth,
@@ -541,6 +545,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     }
 
     result.runtimeSetup = await guideRuntimeSetup({
+      runtime,
       prompter,
       output,
       ui,
@@ -628,7 +633,7 @@ function quickstartSelectedBridgeSourceCount(sources, selectedIds = new Set()) {
   return matchingIds || selectedIds.size
 }
 
-async function guideRuntimeSetup({ prompter, output, ui, options }) {
+async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
   const requestedChoice = requestedRuntimeSetupChoice(options)
   if (requestedChoice?.id === RUNTIME_SETUP_EXISTING) {
     writeStatus(output, ui, 'info', 'Using explicitly requested preconfigured LLM endpoint. This compatibility path is not part of the default QuickStart menu.')
@@ -638,6 +643,7 @@ async function guideRuntimeSetup({ prompter, output, ui, options }) {
       ui,
       options,
       choice: requestedChoice,
+      runtime,
     })
   }
 
@@ -666,8 +672,17 @@ async function guideRuntimeSetup({ prompter, output, ui, options }) {
     return unconfiguredRuntimeSetup(choice, 'Start or configure an OpenAI-compatible runtime later, then rerun with --llm-endpoint URL --llm-model MODEL --runtime-profile PROFILE.')
   }
 
+  let frameworkStatus = null
   if (choice.id === RUNTIME_SETUP_HERMES || choice.id === RUNTIME_SETUP_DEEPAGENTS) {
-    writeRuntimeInstallGuidance(output, ui, choice)
+    frameworkStatus = await runtime.inspectRuntimeFramework({
+      choice,
+      options,
+      env: process.env,
+      probe: runtime.probeRuntimeEndpoint || probeRuntimeEndpoint,
+      commandRunner: runtime.runFrameworkCommand || runBufferedCommand,
+    })
+    writeRuntimeFrameworkStatus(output, ui, choice, frameworkStatus)
+    writeRuntimeInstallGuidance(output, ui, choice, frameworkStatus)
   }
 
   return promptRuntimeConnection({
@@ -676,6 +691,8 @@ async function guideRuntimeSetup({ prompter, output, ui, options }) {
     ui,
     options,
     choice,
+    runtime,
+    frameworkStatus,
   })
 }
 
@@ -684,7 +701,7 @@ function formatRuntimeSetupChoices() {
     'Runtime setup options:',
     '  1) skip/evidence-only — do not configure a model runtime now',
     '  2) Hermes — use/install Hermes, then enter its endpoint',
-    '  3) DeepAgents — use/install DeepAgents, then enter its endpoint',
+    '  3) DeepAgents — check dcode install; bridge runtime endpoint must be entered explicitly',
   ].join('\n') + '\n'
 }
 
@@ -729,16 +746,94 @@ function runtimeSetupChoiceById(id) {
   return RUNTIME_SETUP_COMPAT_CHOICES.find((choice) => choice.id === id) || RUNTIME_SETUP_CHOICES[0]
 }
 
-function writeRuntimeInstallGuidance(output, ui, choice) {
+function writeRuntimeFrameworkStatus(output, ui, choice, status = {}) {
+  const label = frameworkDisplayName(choice)
+  if (status.installed) {
+    const versionText = status.version ? ` (${status.version})` : ''
+    writeStatus(output, ui, 'ok', `${label} install: \`${status.installCheck?.displayCommand || status.command || choice.id}\` detected${versionText}.`)
+    const checkSummary = formatFrameworkCheckSummary(status.checks)
+    if (checkSummary) {
+      writeStatus(output, ui, 'info', `${label} supported checks: ${checkSummary}.`)
+    }
+  } else {
+    writeStatus(output, ui, 'info', `${label} install: \`${status.installCheck?.displayCommand || status.command || choice.id}\` was not detected on PATH.`)
+  }
+  if (choice.id === RUNTIME_SETUP_HERMES) {
+    if (status.runtime?.ok) {
+      writeStatus(output, ui, 'ok', `${label} runtime: API health detected at ${status.runtime.url}; prompt default is ${status.endpointDefault?.value || status.runtime.baseUrl}.`)
+    } else if (status.installed) {
+      writeStatus(output, ui, 'info', `${label} runtime: CLI is installed, but no supported API health endpoint responded. Start Hermes until ${formatHermesRuntimeProbeTarget(status)} answers /health or /v1/health, or enter a reachable endpoint below.`)
+    } else {
+      writeStatus(output, ui, 'info', `${label} runtime: no supported local API health endpoint was detected. Quickstart will not infer a Hermes endpoint from HERMES_BASE_URL or other legacy aliases.`)
+    }
+  }
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    if (status.endpointDefault?.value) {
+      writeStatus(output, ui, 'info', `${label} runtime: using the standard ${status.endpointDefault.source} endpoint as the prompt default; dcode config is not used as a runtime endpoint default.`)
+    } else {
+      writeStatus(output, ui, 'info', `${label} runtime: no supported OpenAI-compatible local endpoint discovery method is recorded, so enter the endpoint after starting it or type skip for evidence-only.`)
+    }
+  }
+}
+
+function frameworkDisplayName(choice = {}) {
+  return choice.id === RUNTIME_SETUP_DEEPAGENTS ? 'DeepAgents Code' : (choice.label || choice.id || 'Runtime framework')
+}
+
+function formatFrameworkCheckSummary(checks = []) {
+  return checks
+    .filter((check) => check.name && check.name !== 'version')
+    .map((check) => `${check.name} ${formatFrameworkCheckState(check)}`)
+    .join('; ')
+}
+
+function formatFrameworkCheckState(check = {}) {
+  if (check.ok && check.safeConfig?.ok === false) {
+    return 'readable; secret-like config values omitted'
+  }
+  if (check.ok) {
+    return 'ok'
+  }
+  if (check.skipped) {
+    return 'skipped'
+  }
+  return 'unavailable'
+}
+
+function formatHermesRuntimeProbeTarget(status = {}) {
+  const firstProbe = status.endpointDefault?.probes?.[0]
+  return firstProbe?.baseUrl || status.endpointDefault?.rejected?.value || DEFAULT_BRIDGE_RUNTIME_BASE_URL
+}
+
+function writeRuntimeInstallGuidance(output, ui, choice, status = {}) {
   const installPlan = runtimeInstallPlan(choice)
   if (installPlan.autoInstallAvailable) {
     writeStatus(output, ui, 'info', `${choice.label} install command is documented for this repository. Quickstart can run it only after explicit approval.`)
     output.write(`  ${formatCommand(installPlan.command)}\n`)
     return
   }
-  writeStatus(output, ui, 'info', `No repo-confirmed auto-install command for ${choice.label} was found, so quickstart will not install it automatically.`)
+  const label = frameworkDisplayName(choice)
+  writeStatus(output, ui, 'info', `No repo-confirmed auto-install command for ${label} was found, so quickstart will not install it automatically.`)
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    const installAction = status.installed
+      ? 'DeepAgents Code appears installed. Use dcode doctor and dcode config show --json for its own supported diagnostics.'
+      : 'Install DeepAgents Code from its official docs or trusted local project, then verify it with dcode --version or dcode doctor.'
+    const docsLines = Object.values(status.docs || {}).filter(Boolean).map((url) => `Docs: ${url}`)
+    output.write([
+      `Safe ${label} path: ${installAction}`,
+      ...docsLines,
+      'Quickstart will not infer a bridge runtime endpoint from DeepAgents config. If you intentionally have an OpenAI-compatible model endpoint for the bridge to call directly, enter it below; otherwise press Enter or type skip to continue evidence-only.',
+      `To rerun after the endpoint is running: llmwiki-bridge-start --setup-bridge --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}`,
+    ].join('\n') + '\n')
+    return
+  }
+  const installAction = status.installed
+    ? `${label} appears installed. Start or configure its supported runtime endpoint, then enter that endpoint below.`
+    : `Install ${label} from its official docs or trusted local project, then start it until it exposes a supported endpoint.`
+  const docsLines = Object.values(status.docs || {}).filter(Boolean).map((url) => `Docs: ${url}`)
   output.write([
-    `Safe ${choice.label} path: install and start ${choice.label} from its own trusted docs or local project until it exposes an OpenAI-compatible /v1/chat/completions endpoint.`,
+    `Safe ${label} path: ${installAction}`,
+    ...docsLines,
     `After it is running, enter its base URL below or rerun: llmwiki-bridge-start --setup-bridge --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}`,
   ].join('\n') + '\n')
 }
@@ -751,17 +846,35 @@ function runtimeInstallPlan(choice) {
   }
 }
 
-async function promptRuntimeConnection({ prompter, output, ui, options, choice }) {
-  const endpointDefault = runtimeEndpointDefault(choice, options, process.env)
+async function promptRuntimeConnection({ prompter, output, ui, options, choice, runtime: runtimeApi = { probeRuntimeEndpoint }, frameworkStatus = null }) {
+  const endpointDefault = frameworkStatus?.endpointDefault || await resolveRuntimeEndpointDefault({
+    choice,
+    options,
+    env: process.env,
+    probe: runtimeApi.probeRuntimeEndpoint || probeRuntimeEndpoint,
+  })
+  writeRuntimeEndpointDefaultNotice(output, ui, choice, endpointDefault)
   const endpointAnswer = await promptRuntimeEndpoint(
     prompter,
     formatRuntimeEndpointPrompt(choice, endpointDefault),
-    endpointDefault,
+    endpointDefault.value,
   )
   const baseUrl = normalizeRuntimeBaseUrl(endpointAnswer)
   if (!baseUrl) {
-    const nextAction = `Start ${choice.label} so it exposes an OpenAI-compatible endpoint, then rerun with --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}.`
+    const nextAction = runtimeEndpointMissingNextAction(choice)
     writeStatus(output, ui, 'skip', `No runtime endpoint entered. Continuing with evidence-only bridge mode. Next action: ${nextAction}`)
+    return unconfiguredRuntimeSetup(choice, nextAction)
+  }
+  const endpointProbe = await verifyRuntimeEndpointForChoice({
+    choice,
+    baseUrl,
+    output,
+    ui,
+    probe: runtimeApi.probeRuntimeEndpoint || probeRuntimeEndpoint,
+  })
+  if (endpointProbe.ok === false) {
+    const nextAction = `Start ${choice.label} and verify its supported health endpoint, then rerun with --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}.`
+    writeStatus(output, ui, 'skip', `Runtime endpoint was not accepted. Continuing with evidence-only bridge mode. Next action: ${nextAction}`)
     return unconfiguredRuntimeSetup(choice, nextAction)
   }
 
@@ -784,25 +897,147 @@ async function promptRuntimeConnection({ prompter, output, ui, options, choice }
     llmModel: model || choice.model,
     runtimeProfile: profile || choice.profile,
   }
-  const runtime = detectLlmRuntime(runtimeOptions, {})
-  writeStatus(output, ui, 'ok', `Runtime configured for bridge start: profile=${runtime.profile}, model=${runtime.model}, endpoint=${runtime.baseUrl}`)
+  const runtimeInfo = detectLlmRuntime(runtimeOptions, {})
+  writeStatus(output, ui, 'ok', `Runtime configured for bridge start: profile=${runtimeInfo.profile}, model=${runtimeInfo.model}, endpoint=${runtimeInfo.baseUrl}`)
   return {
     choice: choice.id,
     label: choice.label,
     configured: true,
-    baseUrl: runtime.baseUrl,
-    model: runtime.model,
-    profile: runtime.profile,
+    baseUrl: runtimeInfo.baseUrl,
+    model: runtimeInfo.model,
+    profile: runtimeInfo.profile,
     runtimeOptions,
-    runtime,
+    runtime: runtimeInfo,
   }
 }
 
-function formatRuntimeEndpointPrompt(choice, endpointDefault) {
-  if (endpointDefault) {
-    return `[?] ${choice.label} runtime base URL (OpenAI-compatible; press Enter to use ${endpointDefault}, or type skip for evidence-only)`
+async function resolveRuntimeEndpointDefault({ choice, options = {}, env = process.env, probe = probeRuntimeEndpoint } = {}) {
+  const configured = runtimeEndpointDefaultInfo(choice, options, env)
+  if (configured.value) {
+    if (choice.id === RUNTIME_SETUP_HERMES) {
+      const checked = await probeRuntimeEndpointForDefault({
+        baseUrl: configured.value,
+        source: configured.source,
+        profile: choice.profile,
+        probe,
+      })
+      const health = checked.health
+      if (health.ok) {
+        return { ...configured, verified: true, health, probes: [checked] }
+      }
+      return { value: '', rejected: configured, health, probes: [checked] }
+    }
+    return { ...configured, probes: [] }
+  }
+  if (choice.id === RUNTIME_SETUP_HERMES) {
+    const localHermes = DEFAULT_BRIDGE_RUNTIME_BASE_URL
+    const checked = await probeRuntimeEndpointForDefault({
+      baseUrl: localHermes,
+      source: 'Hermes /health',
+      profile: choice.profile,
+      probe,
+    })
+    const health = checked.health
+    if (health.ok) {
+      return {
+        value: localHermes,
+        source: 'Hermes /health',
+        verified: true,
+        health,
+        probes: [checked],
+      }
+    }
+    return { value: '', source: '', probes: [checked] }
+  }
+  return { value: '', source: '', probes: [] }
+}
+
+async function probeRuntimeEndpointForDefault({ baseUrl, source, profile, probe }) {
+  try {
+    return {
+      baseUrl,
+      source,
+      health: await probe({ baseUrl, profile }),
+    }
+  } catch (error) {
+    return {
+      baseUrl,
+      source,
+      health: {
+        ok: false,
+        baseUrl,
+        profile,
+        error: error.message,
+      },
+    }
+  }
+}
+
+function runtimeEndpointDefaultInfo(choice, options = {}, env = process.env) {
+  const candidates = [
+    [options.llmEndpoint, '--llm-endpoint'],
+    [options['llm-endpoint'], '--llm-endpoint'],
+    [options.runtimeBaseUrl, '--runtime-base-url'],
+    [options['runtime-base-url'], '--runtime-base-url'],
+    [env.LLMWIKI_AGENT_BRIDGE_BASE_URL, 'LLMWIKI_AGENT_BRIDGE_BASE_URL'],
+  ]
+  for (const [value, source] of candidates) {
+    const text = stringOption(value, '')
+    if (text) {
+      return { value: text, source }
+    }
+  }
+  return { value: '', source: '' }
+}
+
+function writeRuntimeEndpointDefaultNotice(output, ui, choice, endpointDefault = {}) {
+  if (endpointDefault.rejected?.value) {
+    writeStatus(output, ui, 'fail', `${choice.label} endpoint from ${endpointDefault.rejected.source} did not pass health check: ${endpointDefault.health?.error || 'unreachable'}`)
+    writeStatus(output, ui, 'info', 'It will not be used as the Enter default. Enter a reachable endpoint or type skip for evidence-only.')
+    return
+  }
+  if (endpointDefault.value && endpointDefault.verified) {
+    writeStatus(output, ui, 'ok', `${choice.label} endpoint verified via ${endpointDefault.source}: ${endpointDefault.value}`)
+  } else if (endpointDefault.value) {
+    writeStatus(output, ui, 'info', `${choice.label} endpoint configured from ${endpointDefault.source}: ${endpointDefault.value}`)
+  }
+}
+
+async function verifyRuntimeEndpointForChoice({ choice, baseUrl, output, ui, probe = probeRuntimeEndpoint } = {}) {
+  if (choice.id !== RUNTIME_SETUP_HERMES) {
+    return { ok: true, skipped: true, reason: `${choice.label} has no registered framework health probe in quickstart yet` }
+  }
+  const health = await probe({ baseUrl, profile: choice.profile })
+  if (health.ok) {
+    writeStatus(output, ui, 'ok', `${choice.label} health check passed: ${health.url}`)
+    return health
+  }
+  writeStatus(output, ui, 'fail', `${choice.label} health check failed for ${baseUrl}: ${health.error || 'unreachable'}`)
+  return health
+}
+
+function formatRuntimeEndpointPrompt(choice, endpointDefault = {}) {
+  if (endpointDefault.value) {
+    const source = endpointDefault.verified
+      ? `verified from ${endpointDefault.source}`
+      : `configured from ${endpointDefault.source}`
+    return `[?] ${choice.label} runtime base URL (OpenAI-compatible; ${source}: ${endpointDefault.value}; press Enter to use it, or type skip for evidence-only)`
+  }
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    return '[?] Optional bridge runtime base URL (OpenAI-compatible; DeepAgents is checked via dcode, but no DeepAgents endpoint is inferred; press Enter or type skip to continue evidence-only)'
   }
   return `[?] ${choice.label} runtime base URL (OpenAI-compatible, e.g. ${DEFAULT_BRIDGE_RUNTIME_BASE_URL}; press Enter or type skip to continue evidence-only)`
+}
+
+function runtimeEndpointMissingNextAction(choice) {
+  const rerun = `rerun with --llm-endpoint <runtime-url> --llm-model ${choice.model} --runtime-profile ${choice.profile}.`
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    return `If you intentionally have an OpenAI-compatible model endpoint for the bridge to call directly, ${rerun} Otherwise continue with evidence-only bridge mode or direct source MCP URLs.`
+  }
+  if (choice.id === RUNTIME_SETUP_HERMES) {
+    return `Enable the Hermes API server and start the Hermes gateway until /health or /v1/health responds, then ${rerun}`
+  }
+  return `Start ${choice.label} so it exposes an OpenAI-compatible endpoint, then ${rerun}`
 }
 
 async function promptRuntimeEndpoint(prompter, question, fallback = '') {
@@ -837,17 +1072,7 @@ async function promptRuntimeProfile(prompter, output, question, fallback = 'gene
 }
 
 function runtimeEndpointDefault(choice, options = {}, env = process.env) {
-  return stringOption(
-    options.llmEndpoint
-      ?? options['llm-endpoint']
-      ?? options.runtimeBaseUrl
-      ?? options['runtime-base-url']
-      ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL
-      ?? (choice.id === RUNTIME_SETUP_HERMES ? env.HERMES_BASE_URL : undefined)
-      ?? (choice.id === RUNTIME_SETUP_DEEPAGENTS ? env.DEEPAGENTS_BASE_URL : undefined)
-      ?? env.OPENAI_BASE_URL,
-    '',
-  )
+  return runtimeEndpointDefaultInfo(choice, options, env).value
 }
 
 function runtimeModelDefault(choice, options = {}, env = process.env) {
@@ -855,10 +1080,7 @@ function runtimeModelDefault(choice, options = {}, env = process.env) {
     options.llmModel
       ?? options['llm-model']
       ?? options.model
-      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL
-      ?? (choice.id === RUNTIME_SETUP_HERMES ? env.HERMES_MODEL : undefined)
-      ?? (choice.id === RUNTIME_SETUP_DEEPAGENTS ? env.DEEPAGENTS_MODEL : undefined)
-      ?? env.OPENAI_MODEL,
+      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL,
     choice.model,
   )
 }
@@ -3823,6 +4045,295 @@ export async function checkBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL) {
   }
 }
 
+export async function inspectRuntimeFramework({ choice, profile, options = {}, env = process.env, probe = probeRuntimeEndpoint, commandRunner = runBufferedCommand } = {}) {
+  const framework = runtimeFrameworkId(choice, profile)
+  if (framework === RUNTIME_SETUP_HERMES) {
+    return inspectHermesFramework({ choice: runtimeSetupChoiceById(RUNTIME_SETUP_HERMES), options, env, probe, commandRunner })
+  }
+  if (framework === RUNTIME_SETUP_DEEPAGENTS) {
+    return inspectDeepAgentsFramework({ choice: runtimeSetupChoiceById(RUNTIME_SETUP_DEEPAGENTS), options, env, commandRunner })
+  }
+  return {
+    framework,
+    installed: false,
+    supported: false,
+    reason: 'no framework-specific install check registered',
+  }
+}
+
+function runtimeFrameworkId(choice, profile) {
+  const normalized = String(
+    (typeof choice === 'string' ? choice : choice?.id || choice?.profile)
+      || profile
+      || '',
+  ).trim().toLowerCase()
+  return normalized === 'deep-agents' ? RUNTIME_SETUP_DEEPAGENTS : normalized
+}
+
+async function inspectHermesFramework({ choice, options = {}, env = process.env, probe = probeRuntimeEndpoint, commandRunner = runBufferedCommand } = {}) {
+  const checks = await runFrameworkCheckPlan(commandRunner, 'hermes', [
+    { name: 'version', args: ['--version'], output: 'version' },
+    { name: 'status', args: ['status'] },
+    { name: 'doctor', args: ['doctor'] },
+  ])
+  const installCheck = checks[0]
+  const endpointDefault = await resolveRuntimeEndpointDefault({
+    choice,
+    options,
+    env,
+    probe,
+  })
+  const runtime = endpointDefault.value && endpointDefault.verified
+    ? {
+        ok: true,
+        profile: choice.profile,
+        baseUrl: endpointDefault.value,
+        url: endpointDefault.health?.url,
+        status: endpointDefault.health?.status || 'ok',
+      }
+    : {
+        ok: false,
+        profile: choice.profile,
+        baseUrl: endpointDefault.rejected?.value || endpointDefault.probes?.[0]?.baseUrl || DEFAULT_BRIDGE_RUNTIME_BASE_URL,
+        error: endpointDefault.health?.error || endpointDefault.probes?.[0]?.health?.error || 'not running',
+      }
+  return {
+    framework: RUNTIME_SETUP_HERMES,
+    supported: true,
+    command: 'hermes',
+    installed: frameworkCommandWasFound(installCheck),
+    installCheck,
+    checks,
+    version: installCheck.version,
+    runtime,
+    endpointDefault,
+    docs: {
+      cli: 'https://hermes-agent.nousresearch.com/docs/reference/cli-commands',
+      apiServer: 'https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server',
+    },
+  }
+}
+
+async function inspectDeepAgentsFramework({ choice, options = {}, env = process.env, commandRunner = runBufferedCommand } = {}) {
+  const checks = await runFrameworkCheckPlan(commandRunner, 'dcode', [
+    { name: 'version', args: ['--version'], output: 'version' },
+    { name: 'doctor', args: ['doctor'] },
+    { name: 'config', args: ['config', 'show', '--json'], output: 'safe-json-config' },
+  ])
+  const installCheck = checks[0]
+  const endpointDefault = runtimeEndpointDefaultInfo(choice, options, env)
+  return {
+    framework: RUNTIME_SETUP_DEEPAGENTS,
+    supported: true,
+    command: 'dcode',
+    installed: frameworkCommandWasFound(installCheck),
+    installCheck,
+    checks,
+    version: installCheck.version,
+    runtime: {
+      ok: false,
+      skipped: true,
+      reason: 'DeepAgents Code has supported CLI diagnostics, but no registered local OpenAI-compatible runtime endpoint discovery contract in quickstart.',
+    },
+    endpointDefault,
+    docs: {
+      overview: 'https://docs.langchain.com/oss/python/deepagents/code/overview',
+      configuration: 'https://docs.langchain.com/oss/python/deepagents/code/configuration',
+    },
+  }
+}
+
+async function runFrameworkCheckPlan(commandRunner, command, checks = []) {
+  const results = []
+  for (const check of checks) {
+    if (results.length > 0 && !frameworkCommandWasFound(results[0])) {
+      results.push({
+        name: check.name,
+        command,
+        args: check.args,
+        displayCommand: `${command} ${check.args.join(' ')}`.trim(),
+        ok: false,
+        skipped: true,
+        status: null,
+        error: 'CLI not detected',
+      })
+      continue
+    }
+    results.push(await runFrameworkCheck(commandRunner, command, check.args, check))
+  }
+  return results
+}
+
+async function runFrameworkCheck(commandRunner, command, args = [], check = {}) {
+  const displayCommand = `${command} ${args.join(' ')}`.trim()
+  try {
+    const result = await commandRunner(command, args, {
+      timeoutMs: DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS,
+      maxBuffer: RUNTIME_FRAMEWORK_COMMAND_MAX_BUFFER,
+    })
+    const rawOutput = `${result.stdout || ''}\n${result.stderr || ''}`
+    const output = check.output === 'version' ? compactText(rawOutput, 160) : ''
+    const safeConfig = check.output === 'safe-json-config'
+      ? summarizeSafeFrameworkConfig(result.stdout)
+      : undefined
+    return {
+      name: check.name || displayCommand,
+      command,
+      args,
+      displayCommand,
+      ok: !result.error && result.status === 0,
+      status: result.status,
+      error: result.error?.code || result.error?.message || '',
+      output,
+      version: parseFrameworkVersion(output),
+      ...(safeConfig ? { safeConfig } : {}),
+    }
+  } catch (error) {
+    return {
+      name: check.name || displayCommand,
+      command,
+      args,
+      displayCommand,
+      ok: false,
+      status: null,
+      error: error.message,
+      output: '',
+      version: '',
+    }
+  }
+}
+
+function frameworkCommandWasFound(check = {}) {
+  if (check.error === 'ENOENT') {
+    return false
+  }
+  if (check.status !== null && check.status !== undefined) {
+    return true
+  }
+  return Boolean(check.output || check.version)
+}
+
+function parseFrameworkVersion(output) {
+  const text = String(output || '').trim()
+  if (!text) {
+    return ''
+  }
+  const versionMatch = text.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/)
+  if (versionMatch) {
+    return versionMatch[0]
+  }
+  return compactText(text.split(/\r?\n/)[0], 80)
+}
+
+function summarizeSafeFrameworkConfig(output) {
+  const text = String(output || '').trim()
+  if (!text) {
+    return { ok: false, reason: 'empty config output' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, reason: 'config output was not JSON' }
+  }
+  const keys = []
+  const secretPaths = []
+  collectJsonKeyPaths(parsed, '', { keys, secretPaths })
+  if (secretPaths.length) {
+    return {
+      ok: false,
+      reason: 'secret-like keys present; values omitted',
+      secretKeyCount: secretPaths.length,
+    }
+  }
+  return {
+    ok: true,
+    keyCount: keys.length,
+    keys: keys.slice(0, 12),
+  }
+}
+
+function collectJsonKeyPaths(value, prefix, { keys, secretPaths }) {
+  if (!value || typeof value !== 'object') {
+    return
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      collectJsonKeyPaths(value[index], `${prefix}[${index}]`, { keys, secretPaths })
+    }
+    return
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    keys.push(path)
+    if (isSecretLikeConfigKey(key)) {
+      secretPaths.push(path)
+      continue
+    }
+    collectJsonKeyPaths(child, path, { keys, secretPaths })
+  }
+}
+
+function isSecretLikeConfigKey(key) {
+  return /(?:api[_-]?key|token|secret|password|credential|authorization|bearer)/i.test(String(key || ''))
+}
+
+export const detectRuntimeFramework = inspectRuntimeFramework
+
+export async function probeRuntimeEndpoint({ baseUrl, profile = 'generic', timeoutMs = 2000, fetchJson: fetchRuntimeJson = fetchJson } = {}) {
+  const normalizedBaseUrl = normalizeRuntimeBaseUrl(baseUrl)
+  const runtimeProfile = parseRuntimeProfile(profile, 'generic')
+  if (runtimeProfile !== RUNTIME_SETUP_HERMES) {
+    return {
+      ok: true,
+      skipped: true,
+      profile: runtimeProfile,
+      baseUrl: normalizedBaseUrl,
+      reason: 'no registered framework health probe',
+    }
+  }
+  const healthUrls = hermesHealthUrls(normalizedBaseUrl)
+  const errors = []
+  for (const url of healthUrls) {
+    try {
+      const health = await fetchRuntimeJson(url, { timeoutMs })
+      const status = String(health.status || '').toLowerCase()
+      if (!status || status === 'ok' || status === 'healthy' || status === 'ready') {
+        return {
+          ok: true,
+          profile: runtimeProfile,
+          baseUrl: normalizedBaseUrl,
+          url,
+          status: health.status || 'ok',
+        }
+      }
+      errors.push(`${url}: status=${health.status}`)
+    } catch (error) {
+      errors.push(`${url}: ${error.message}`)
+    }
+  }
+  return {
+    ok: false,
+    profile: runtimeProfile,
+    baseUrl: normalizedBaseUrl,
+    urls: healthUrls,
+    error: errors.join('; '),
+  }
+}
+
+function hermesHealthUrls(baseUrl) {
+  const parsed = new URL(baseUrl)
+  const origin = `${parsed.protocol}//${parsed.host}`
+  const basePath = parsed.pathname.replace(/\/+$/, '')
+  const paths = ['/health']
+  if (basePath && basePath !== '/') {
+    paths.push(`${basePath}/health`)
+  } else {
+    paths.push('/v1/health')
+  }
+  return [...new Set(paths)].map((path) => new URL(path, origin).toString())
+}
+
 export async function waitForBridgeHealth(bridgeUrl = DEFAULT_BRIDGE_URL, { timeoutMs = 15000, intervalMs = 500 } = {}) {
   const deadline = Date.now() + timeoutMs
   let health = await checkBridgeHealth(bridgeUrl)
@@ -3888,20 +4399,14 @@ export function detectLlmRuntime(options = {}, env = process.env) {
       ?? options['llm-endpoint']
       ?? options.runtimeBaseUrl
       ?? options['runtime-base-url']
-      ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL
-      ?? env.HERMES_BASE_URL
-      ?? env.DEEPAGENTS_BASE_URL
-      ?? env.OPENAI_BASE_URL,
+      ?? env.LLMWIKI_AGENT_BRIDGE_BASE_URL,
     '',
   ))
   const model = stringOption(
     options.llmModel
       ?? options['llm-model']
       ?? options.model
-      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL
-      ?? env.HERMES_MODEL
-      ?? env.DEEPAGENTS_MODEL
-      ?? env.OPENAI_MODEL,
+      ?? env.LLMWIKI_AGENT_BRIDGE_MODEL,
     'local-model',
   )
   const profile = parseRuntimeProfile(stringOption(

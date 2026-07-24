@@ -57,6 +57,11 @@
 - [x] Add active timer spinner/progress feedback during long discovery and
   manifest validation phases, and format final bridge handoff as a readable
   grouped block.
+- [x] Stop treating legacy/user-local runtime env aliases as first-run
+  QuickStart defaults; verify Hermes endpoints through supported health checks.
+- [x] Check runtime framework installation with framework-supported CLI
+  entrypoints (`hermes --version`, `dcode --version`) and avoid inferring a
+  DeepAgents bridge endpoint without a documented endpoint discovery contract.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

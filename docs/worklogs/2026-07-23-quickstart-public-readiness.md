@@ -147,6 +147,13 @@ onboarding harness.
 - Follow-up on 2026-07-24: Hermes/DeepAgents endpoint prompts now state that
   blank Enter uses a shown default, while `skip` forces evidence-only; when no
   default is shown, blank Enter or `skip` continues evidence-only.
+- Follow-up on 2026-07-24: runtime framework detection now follows documented
+  framework checks instead of private machine environment aliases. Hermes
+  install detection uses `hermes --version`, and Hermes endpoint defaults are
+  accepted only after `/health` or `/v1/health` responds. DeepAgents Code
+  install detection uses `dcode --version`; quickstart deliberately does not
+  infer a bridge runtime endpoint from `dcode` config until a supported local
+  endpoint discovery contract is documented.
 
 ## Validation
 
@@ -245,6 +252,20 @@ onboarding harness.
   - Final bridge handoff is formatted as grouped Bridge / Endpoints / Settings
     sections instead of adjacent dense URL lines.
   - `npm run check` passed with 84 Node tests plus package dry-run.
+- Follow-up runtime default hardening:
+  - `HERMES_BASE_URL` is treated as a legacy/user-local compatibility alias,
+    not as evidence that Hermes is installed or running.
+  - Quickstart no longer uses `HERMES_BASE_URL`, `DEEPAGENTS_BASE_URL`, or
+    `OPENAI_BASE_URL` as first-run runtime endpoint defaults.
+  - Hermes runtime setup may offer a default only when an explicit
+    `LLMWIKI_AGENT_BRIDGE_BASE_URL`/CLI endpoint passes Hermes health probing,
+    or when the local default Hermes API server health endpoint responds.
+  - DeepAgents remains endpoint-input driven because no equivalent
+    OpenAI-compatible local endpoint discovery contract is currently recorded.
+  - Runtime framework inspection now tests the documented install checks
+    directly (`hermes --version`, `dcode --version`) and includes Hermes health
+    probe coverage.
+  - `npm run check` passed with 88 Node tests plus package dry-run.
 
 ## Commits
 
@@ -265,7 +286,8 @@ onboarding harness.
 - `2abcece` — Select active quickstart sources on bridge register
 - `d5b245c` — Harden quickstart onboarding flow
 - `f6bb1eb` — Polish quickstart branch handoffs
-- pending — Add active quickstart progress spinner and grouped handoff output
+- `6a572e5` — Add active quickstart progress spinners
+- current — Harden quickstart runtime detection
 
 ## Follow-ups
 

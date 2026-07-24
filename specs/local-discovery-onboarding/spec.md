@@ -253,7 +253,21 @@ source server.
 - Hermes and DeepAgents endpoint prompts must make default behavior explicit:
   if a default endpoint is shown, blank Enter uses that default and `skip`
   forces evidence-only; if no default is shown, blank Enter or `skip` continues
-  evidence-only.
+  evidence-only. Defaults may come from explicit CLI flags, the standard
+  `LLMWIKI_AGENT_BRIDGE_BASE_URL`, or a framework-supported local health probe
+  such as Hermes `/health`. Quickstart must not treat legacy/user-local aliases
+  such as `HERMES_BASE_URL`, `DEEPAGENTS_BASE_URL`, or `OPENAI_BASE_URL` as
+  first-run defaults.
+- Runtime setup must check framework installation with framework-supported CLI
+  entrypoints: Hermes via `hermes --version`, DeepAgents Code via
+  `dcode --version`. Additional diagnostics may be shown only when they are
+  supported by the framework docs, such as `hermes doctor`, `hermes status`,
+  `dcode doctor`, or `dcode config show --json`.
+- Hermes runtime setup must verify a selected/default endpoint through the
+  framework-supported API-server health endpoint before configuring the bridge.
+  If the health check fails, quickstart must continue evidence-only and print a
+  clear next action. DeepAgents must not claim automatic endpoint detection
+  unless a supported local runtime health/discovery method is available.
 - Runtime setup results must flow through the same runtime detection path used
   by bridge startup env construction and bridge smoke mode selection. An
   explicit skip/evidence-only runtime setup choice must prevent inherited

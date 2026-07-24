@@ -68,10 +68,20 @@ runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents.
 Hermes and DeepAgents are the supported QuickStart runtime profiles. When a
 repo-confirmed runtime install command is not available, quickstart does not
 auto-install them. Instead it prints safe install/start guidance and asks for
-the endpoint after the runtime is running. If a default endpoint is shown,
-blank Enter uses that default; type `skip` to force evidence-only. If no
-default endpoint is shown, blank Enter or `skip` continues with evidence-only
-bridge smoke.
+the endpoint only after the runtime is running. Runtime setup checks installed
+frameworks through their supported CLI entrypoints (`hermes --version`,
+`dcode --version`) and uses Hermes API server health (`/health` or
+`/v1/health`) when deciding whether a Hermes endpoint can be offered as the
+Enter default. DeepAgents Code is checked through `dcode`, but quickstart does
+not infer a bridge runtime endpoint from DeepAgents config because no supported
+local endpoint discovery contract is recorded here. Quickstart also does not
+treat legacy or user-local runtime aliases such as `HERMES_BASE_URL`,
+`DEEPAGENTS_BASE_URL`, or `OPENAI_BASE_URL` as first-run defaults. If a default
+endpoint is shown, it came from an explicit CLI flag, the standard
+`LLMWIKI_AGENT_BRIDGE_BASE_URL`, or a framework-supported local health probe
+such as Hermes `/health`; blank Enter uses that verified/configured default,
+and `skip` forces evidence-only. If no default endpoint is shown, blank Enter
+or `skip` continues with evidence-only bridge smoke.
 Quickstart runs the bridge start command only after a second explicit
 approval. Once a bridge is running, it merge-registers the started sources and
 runs an A2A-style smoke request. After a successful bridge smoke, quickstart
