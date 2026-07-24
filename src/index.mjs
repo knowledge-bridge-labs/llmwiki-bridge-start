@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createServer as createNetServer } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -20,6 +21,7 @@ const FAST_DISCOVERY_TIMEOUT_MS = 30000
 const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
 const DEFAULT_SOURCE_HEALTH_TIMEOUT_MS = 15000
 const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
+const SOURCE_PORT_PROBE_MAX_ATTEMPTS = 200
 const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
 const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
@@ -419,7 +421,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     output.write(formatQuickstartScanRoots(roots))
     if (!await confirmQuickstart(prompter, formatQuickstartDiscoveryPrompt(options), true)) {
       writeStatus(output, ui, 'skip', 'Skipped discovery.')
-      output.write('Run `llmwiki-bridge-start start --path DIR` when you already know a source path.\n')
+      output.write(formatQuickstartDiscoveryDeclineNextAction(options))
       result.skipped.push('discovery', 'selection', 'start', 'bridge-setup', 'register', 'smoke')
       return result
     }
@@ -513,6 +515,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     result.sourceUrls = sourceUrlsFromStartedSources(result.started.sources)
     writeStatus(output, ui, 'ok', `Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}`)
+    writeQuickstartPortFallbackInfo(output, ui, result.started.sources)
     writeStatus(output, ui, 'info', 'Started source endpoint(s) are healthy. If you skip bridge setup, quickstart will print MCP Streamable HTTP registration URL(s).')
 
     writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Optional bridge setup')
@@ -555,13 +558,14 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     const registerMode = boolOption(options.replace) ? 'replace' : 'merge'
     writeQuickstartStep(output, ui, 5, QUICKSTART_STEP_TOTAL, 'Register and smoke test')
     writeStatus(output, ui, 'run', `Registering started source(s) with ${bridgeUrl} (${registerMode} mode).`)
+    const quickstartSelectedIds = new Set(result.started.sources.map((source) => source.id))
     result.registered = await runtime.registerSources({
       bridgeUrl,
       configPath,
-      selectedIds: new Set(result.started.sources.map((source) => source.id)),
+      selectedIds: quickstartSelectedIds,
       replace: boolOption(options.replace),
     })
-    writeStatus(output, ui, 'ok', `Registered ${result.registered.payload.sources.length} total bridge source(s). Register merges by default unless --replace is set.`)
+    writeStatus(output, ui, 'ok', formatQuickstartRegistrationSuccess(result.registered, quickstartSelectedIds))
 
     const smokePlan = await runtime.selectBridgeSmokeMode({ options: smokeOptions, bridgeUrl, env: process.env })
     result.smokeMode = smokePlan.mode
@@ -572,10 +576,41 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       mode: smokePlan.mode,
     })
     writeStatus(output, ui, 'ok', `Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}`)
+    output.write(formatBridgeHandoff(bridgeUrl))
     return result
   } finally {
     prompter.close()
   }
+}
+
+function formatQuickstartRegistrationSuccess(registered, selectedIds = new Set()) {
+  const sources = registeredBridgeSources(registered)
+  const totalCount = Array.isArray(sources) ? sources.length : selectedIds.size
+  const selectedCount = quickstartSelectedBridgeSourceCount(sources, selectedIds)
+  return `Registered ${totalCount} total bridge source(s); ${selectedCount} selected for this quickstart. Register merges by default unless --replace is set.`
+}
+
+function registeredBridgeSources(registered) {
+  if (Array.isArray(registered?.payload?.sources)) {
+    return registered.payload.sources
+  }
+  if (Array.isArray(registered?.response?.sources)) {
+    return registered.response.sources
+  }
+  return null
+}
+
+function quickstartSelectedBridgeSourceCount(sources, selectedIds = new Set()) {
+  if (!Array.isArray(sources)) {
+    return selectedIds.size
+  }
+  const hasSelectedFlag = sources.some((source) => Object.hasOwn(Object(source), 'selected'))
+  if (hasSelectedFlag) {
+    return sources.filter((source) => source?.selected === true).length
+  }
+  const selectedIdStrings = new Set([...selectedIds].map(String))
+  const matchingIds = sources.filter((source) => selectedIdStrings.has(String(source?.id))).length
+  return matchingIds || selectedIds.size
 }
 
 async function guideRuntimeSetup({ prompter, output, ui, options }) {
@@ -1100,6 +1135,40 @@ function sourceUrlsFromStartedSources(sources = []) {
   return sources.map((source) => source.url).filter(Boolean)
 }
 
+function writeQuickstartPortFallbackInfo(output, ui, sources = []) {
+  for (const source of sources) {
+    const requestedPort = sourceRequestedPort(source)
+    const assignedPort = sourceAssignedPort(source)
+    if (!requestedPort || !assignedPort || requestedPort === assignedPort) {
+      continue
+    }
+    writeStatus(output, ui, 'info', `Requested port ${requestedPort} was occupied; started ${sourceDisplayName(source)} on ${assignedPort}.`)
+  }
+}
+
+function sourceRequestedPort(source = {}) {
+  return Number(source.requestedPort || source.portFallback?.requestedPort || source.portFallback?.requested)
+}
+
+function sourceAssignedPort(source = {}) {
+  return Number(source.port || source.assignedPort || source.portFallback?.assignedPort || source.portFallback?.assigned || sourcePortFromUrl(source.url))
+}
+
+function sourcePortFromUrl(sourceUrl) {
+  if (!sourceUrl) {
+    return 0
+  }
+  try {
+    return Number(new URL(sourceUrl).port)
+  } catch {
+    return 0
+  }
+}
+
+function sourceDisplayName(source = {}) {
+  return source.title || source.name || source.id || source.url || 'source'
+}
+
 function formatCodingAgentRegistrationHandoff(sources = []) {
   const mcpUrls = sources.map((source) => sourceMcpStreamUrl(source.url)).filter(Boolean)
   if (!mcpUrls.length) {
@@ -1126,6 +1195,18 @@ function sourceEndpointUrl(sourceUrl, endpointPath) {
   parsed.search = ''
   parsed.hash = ''
   return trimTrailingSlash(parsed.toString())
+}
+
+function formatBridgeHandoff(bridgeUrl) {
+  const baseUrl = trimTrailingSlash(bridgeUrl)
+  return [
+    'Bridge handoff:',
+    `  - Bridge base URL: ${baseUrl}`,
+    `  - A2A-style answer endpoint: POST ${sourceEndpointUrl(baseUrl, '/message:send')}`,
+    `  - MCP-style JSON-RPC endpoint: POST ${sourceEndpointUrl(baseUrl, '/mcp')}`,
+    `  - Settings UI: ${sourceEndpointUrl(baseUrl, '/settings')}`,
+    'Use the endpoint your agent or script supports; exact client configuration syntax varies by client.',
+  ].join('\n') + '\n'
 }
 
 function writePathRedactionNotice(output, ui) {
@@ -1835,13 +1916,27 @@ function discoverRootsFromOptions(options) {
 }
 
 function formatQuickstartDiscoveryPrompt(options = {}) {
-  const constrained = arrayOption(options.path).length > 0
-    || boolOption(options.cwd)
-    || boolOption(options.workspace)
+  const constrained = quickstartDiscoveryIsConstrained(options)
   const scopeText = constrained
     ? 'Discovery is constrained to the root(s) shown above.'
     : 'Default discovery scans the current user\'s home unless --path/--workspace/--cwd constrains it.'
-  return `Auto-discover local LLMWiki/knowledge source folders?\n${scopeText}`
+  const question = constrained
+    ? 'Find LLMWiki/knowledge source folders under the shown root(s)?'
+    : 'Auto-discover local LLMWiki/knowledge source folders?'
+  return `${question}\n${scopeText}`
+}
+
+function formatQuickstartDiscoveryDeclineNextAction(options = {}) {
+  if (quickstartDiscoveryIsConstrained(options)) {
+    return 'Rerun quickstart when you want to scan the shown root(s), or use `llmwiki-bridge-start start --path DIR` for a specific source folder.\n'
+  }
+  return 'Run `llmwiki-bridge-start --path DIR` to scan a specific root, or `llmwiki-bridge-start start --path DIR` when you already know a source path.\n'
+}
+
+function quickstartDiscoveryIsConstrained(options = {}) {
+  return arrayOption(options.path).length > 0
+    || boolOption(options.cwd)
+    || boolOption(options.workspace)
 }
 
 export async function discoverCandidates({
@@ -2702,13 +2797,16 @@ export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEF
   mkdirSync(logDir, { recursive: true })
   const sources = []
   const startedProcesses = []
+  const assignedPorts = new Set()
   try {
     for (let index = 0; index < paths.length; index += 1) {
       const path = resolve(paths[index])
       if (!safeIsDirectory(path)) {
         throw new Error(`Source path is not a directory: ${path}`)
       }
-      const port = ports[index] || nextAvailablePort(portStart + index)
+      const requestedPort = ports[index] || portStart + index
+      const port = await nextAvailablePort(requestedPort, { host, unavailable: assignedPorts })
+      assignedPorts.add(port)
       const manifest = await llmwikiServeJson(serveInvocation, ['manifest', path], { timeoutMs: 30000 })
       const sourceId = manifest.source_id || slug(manifest.title || basename(path))
       const out = join(logDir, `${sourceId}-${port}.out.log`)
@@ -2754,6 +2852,9 @@ export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEF
         selected: index === 0,
         url: serveUrl,
         path,
+        requestedPort,
+        port,
+        ...(port !== requestedPort ? { portFallback: { requestedPort, assignedPort: port, reason: 'requested-port-occupied' } } : {}),
         processId,
         runnerProcessId: serverProcessId && serverProcessId !== child.pid ? child.pid : undefined,
         manifest: summarizeManifest(manifest),
@@ -2781,6 +2882,10 @@ async function waitForSourceHealth(sourceUrl, { child, logs, timeoutMs = DEFAULT
     try {
       const remainingMs = Math.max(1, deadline - Date.now())
       const health = await fetchJson(new URL('/health', sourceUrl), { timeoutMs: Math.min(1000, remainingMs) })
+      const failureAfterHealth = childFailure()
+      if (failureAfterHealth) {
+        throw new Error(formatSourceHealthFailure(sourceUrl, failureAfterHealth.message, logs))
+      }
       return { ok: true, status: health.status || 'reachable', url: sourceUrl }
     } catch (error) {
       lastError = error
@@ -2991,10 +3096,64 @@ function closeFileDescriptor(fd) {
   }
 }
 
-function nextAvailablePort(start) {
-  // Avoid taking a dependency for port detection. On failure the spawned server
-  // exits and the log explains the bind issue; callers can pass --port.
-  return start
+async function nextAvailablePort(start, { host = DEFAULT_HOST, unavailable = new Set(), maxAttempts = SOURCE_PORT_PROBE_MAX_ATTEMPTS } = {}) {
+  const firstPort = Number(start)
+  if (!Number.isInteger(firstPort) || firstPort < 1 || firstPort > 65535) {
+    throw new Error(`Invalid source port: ${start}`)
+  }
+
+  let attempts = 0
+  for (let port = firstPort; port <= 65535 && attempts < maxAttempts; port += 1) {
+    attempts += 1
+    if (unavailable.has(port)) {
+      continue
+    }
+    if (await hostPortIsAvailable(host, port)) {
+      return port
+    }
+  }
+  throw new Error(`No available source port found for ${host} starting at ${firstPort}`)
+}
+
+function hostPortIsAvailable(host, port) {
+  return new Promise((resolveProbe, rejectProbe) => {
+    const probe = createNetServer()
+    let settled = false
+
+    function finish(error, available) {
+      if (settled) {
+        return
+      }
+      settled = true
+      probe.removeAllListeners('error')
+      probe.removeAllListeners('listening')
+      if (error) {
+        rejectProbe(error)
+        return
+      }
+      resolveProbe(available)
+    }
+
+    probe.unref()
+    probe.once('error', (error) => {
+      if (error?.code === 'EADDRINUSE' || error?.code === 'EACCES') {
+        finish(null, false)
+        return
+      }
+      finish(error)
+    })
+    probe.once('listening', () => {
+      probe.close((error) => {
+        finish(error, true)
+      })
+    })
+
+    try {
+      probe.listen({ host, port, exclusive: true })
+    } catch (error) {
+      finish(error)
+    }
+  })
 }
 
 export async function registerSources({ bridgeUrl = DEFAULT_BRIDGE_URL, configPath = defaultConfigPath(), sourceUrls = [], selectedIds = new Set(), selectFirst = false, replace = false } = {}) {

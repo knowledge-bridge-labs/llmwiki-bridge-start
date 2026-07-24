@@ -46,6 +46,9 @@
   proceeds in evidence-only or unconfigured runtime mode.
 - [x] Use `cross-spawn` for bridge process startup instead of a hand-written
   Windows `cmd.exe` wrapper.
+- [x] Polish expert-verification onboarding UX follow-ups: constrained-scope
+  discovery prompt wording, source port fallback info, and final bridge
+  endpoint handoff copy.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

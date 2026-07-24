@@ -1,5 +1,8 @@
 node_modules/
 .llmwiki-bridge-start/
+.quickstart-eval-*/
+.runtime-logs/
+.tmp-*/
 *.tgz
 .env
 .env.*

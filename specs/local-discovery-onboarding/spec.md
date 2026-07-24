@@ -129,6 +129,11 @@ source server.
   users do not read them as a mandatory sequence.
 - `quickstart` must ask before discovery and make the default home-directory
   scan scope visible unless `--path`, `--workspace`, or `--cwd` constrains it.
+- In constrained discovery mode (`--path`, `--workspace`, or `--cwd`), the
+  discovery approval prompt must say that quickstart will find source folders
+  under the shown root(s), not that it will broadly auto-discover local
+  folders. If the user declines in constrained mode, the next action must not
+  imply they forgot to pass a path.
 - `quickstart` must open with a concise first-time-user explanation of what
   `llmwiki-*` does, what `llmwiki-serve` will expose, and why
   `llmwiki-agent-bridge` is optional.
@@ -176,6 +181,13 @@ source server.
   source, health, manifest, and MCP JSON-RPC endpoint labels.
 - `start`/`quickstart` must not report a launched source as ready until its
   loopback HTTP health endpoint responds within a bounded timeout.
+- Before launching each source, `start`/`quickstart` must check the requested
+  loopback host and port. If the port is already occupied, it must advance to
+  the next available port and must not treat a pre-existing `/health` response
+  on the requested port as readiness for the newly launched source.
+- When quickstart starts a source on a different port because the requested
+  port was occupied, it must print a concise info line naming the requested
+  port, source title/id, and assigned port.
 - `quickstart` must not start or install `llmwiki-agent-bridge` unless the user
   explicitly opts in.
 - After the user opts into bridge setup and before any bridge start attempt,
@@ -192,6 +204,11 @@ source server.
   through the bridge settings API before registration and smoke. If that live
   settings write fails, quickstart must avoid delegated-runtime smoke by
   falling back to evidence-only or stopping before bridge checks.
+- After successful bridge registration and smoke, quickstart must print a
+  final bridge handoff with the bridge base URL, A2A-style answer endpoint
+  (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`), and
+  settings UI (`/settings`). This bridge handoff must not describe the bridge
+  as MCP Streamable HTTP or use the direct-source `/mcp/stream` path.
 - Hermes and DeepAgents must be presented as first-class bridge runtime
   profiles. If the user already has one running, quickstart must collect its
   endpoint and model, then use the matching fixed runtime profile. If not,

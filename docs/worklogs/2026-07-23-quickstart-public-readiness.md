@@ -116,6 +116,21 @@ onboarding harness.
 - Follow-up on 2026-07-24: bridge background startup now uses `cross-spawn`
   for cross-platform command resolution instead of a hand-written Windows
   `cmd.exe` wrapper.
+- Follow-up on 2026-07-24: onboarding expert verification found one
+  release-relevant startup bug. When a requested source port was already
+  occupied by an existing healthy service, quickstart could previously treat
+  that pre-existing `/health` response as readiness for the newly requested
+  source. Source startup now probes requested loopback ports before spawning,
+  advances to the next available port when needed, records requested/assigned
+  port metadata, and prints a concise fallback notice in quickstart.
+- Follow-up on 2026-07-24: bridge registration copy now distinguishes total
+  registered bridge sources from the source count selected by the current
+  quickstart run. This preserves merge-mode registry behavior while reducing
+  first-run confusion when an existing bridge has stale or unrelated sources.
+- Follow-up on 2026-07-24: constrained quickstart discovery now asks users to
+  find source folders under the shown root(s), while broad home scans keep the
+  auto-discover wording. Successful bridge smoke now prints a final bridge
+  handoff with base URL, `POST /message:send`, `POST /mcp`, and `/settings`.
 
 ## Validation
 
@@ -188,6 +203,17 @@ onboarding harness.
   - targeted runtime/bridge/quickstart/env/register test subset passed with 76
     tests
   - `npm run check` passed with 76 Node tests plus package dry-run
+- Follow-up onboarding expert loop:
+  - Direct-source-only quickstart passed with an isolated local source and
+    printed a direct `/mcp/stream` handoff.
+  - Occupied-port regression passed: a deliberately occupied requested source
+    port was skipped, the source started on the next available port, and config
+    recorded the advanced URL.
+  - Optional bridge evidence-only quickstart passed with isolated source and
+    bridge ports; bridge registration and evidence-only smoke completed.
+  - Main-agent post-fix smoke confirmed the final bridge handoff prints bridge
+    base URL, `POST /message:send`, `POST /mcp`, and `/settings`.
+  - `npm run check` passed with 79 Node tests plus package dry-run.
 
 ## Commits
 
@@ -203,7 +229,10 @@ onboarding harness.
 - `b73c2c8` — Polish quickstart candidate guidance
 - `94a6125` — Polish quickstart first-run transcript
 - `613b134` — Add immediate quickstart prompts and progress
-- pending — Add runtime onboarding to bridge quickstart
+- `2ad3b87` — Add runtime onboarding to bridge quickstart
+- `fd8176c` — Focus runtime quickstart on Hermes and DeepAgents
+- `2abcece` — Select active quickstart sources on bridge register
+- pending — Harden quickstart port handling and handoff copy
 
 ## Follow-ups
 

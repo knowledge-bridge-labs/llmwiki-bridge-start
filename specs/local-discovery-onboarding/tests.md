@@ -57,6 +57,10 @@
 - `start` readiness behavior: successful launches wait for `/health`, while
   failed readiness cleans up the spawned process and reports an actionable
   failure.
+- `start` occupied-port behavior: if the requested loopback port already has a
+  listening `/health` service, source startup advances to the next available
+  port and writes the advanced URL to config instead of reporting readiness for
+  the pre-existing service.
 - CLI dispatch paths: `llmwiki-bridge-start` starts quickstart by default,
   explicit `quickstart` remains equivalent, and explicit `discover` remains the
   scriptable listing command.
@@ -96,6 +100,10 @@
 - Quickstart yes/no prompts echo explicit and defaulted selections, and the
   discovery prompt keeps the main question, scan-scope explanation, and
   `[Y/n]` marker on separate lines.
+- Quickstart constrained-scope discovery prompt says it will find source
+  folders under the shown root(s), avoids broad auto-discover wording, and
+  prints a decline next action that does not imply the user forgot to pass a
+  path.
 - Quickstart interactive yes/no prompts reprompt on invalid answers, while
   non-interactive automation avoids unbounded waiting.
 - Quickstart TTY yes/no prompts route through an immediate keypress-capable
@@ -128,6 +136,13 @@
   normal environment and explicit bridge host/port settings.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
+- Quickstart port fallback UX: when requested source port startup falls back
+  to a later port, the transcript includes a concise info line naming the
+  requested port, source title/id, and assigned port.
+- Quickstart bridge success handoff: after registration and smoke, the
+  transcript lists bridge base URL, `POST /message:send`, `POST /mcp`, and
+  `/settings` without describing the bridge as MCP Streamable HTTP or using
+  `/mcp/stream`.
 - Bridge start uses the `cross-spawn` adapter directly for package commands,
   including Windows `.cmd` command names, without a hand-written `cmd.exe`
   wrapper.

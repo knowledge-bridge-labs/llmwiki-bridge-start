@@ -68,9 +68,13 @@ the endpoint after the runtime is running. If you skip runtime setup or leave
 the endpoint blank, quickstart continues with evidence-only bridge smoke.
 Quickstart runs the bridge start command only after a second explicit
 approval. Once a bridge is running, it merge-registers the started sources and
-runs an A2A-style smoke request. If an explicit LLM endpoint is configured
-through flags, quickstart treats it as a preconfigured compatibility path
-without adding it to the interactive first-run menu.
+runs an A2A-style smoke request. After a successful bridge smoke, quickstart
+prints a concise bridge handoff with the bridge base URL, A2A-style answer
+endpoint (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`),
+and settings UI (`/settings`). The bridge endpoint handoff is separate from
+direct source MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
+endpoint is configured through flags, quickstart treats it as a preconfigured
+compatibility path without adding it to the interactive first-run menu.
 
 Quickstart keeps the first selection list focused. By default it shows
 recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and

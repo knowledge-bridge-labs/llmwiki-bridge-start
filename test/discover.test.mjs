@@ -42,6 +42,7 @@ test('runCli starts quickstart when no subcommand is provided', async () => {
   assert.match(prompts[0].question, /Auto-discover local LLMWiki\/knowledge source folders\?\nDefault discovery/)
   assert.match(prompts[0].question, /\n\[Y\/n\]: $/)
   assert.match(prompts[0].question, /current user's home/)
+  assert.match(stdout.text, /Run `llmwiki-bridge-start --path DIR` to scan a specific root/)
 })
 
 test('runCli keeps explicit quickstart available', async () => {
@@ -66,6 +67,7 @@ test('runCli keeps explicit quickstart available', async () => {
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Auto-discover/)
   assert.match(prompts[0].question, /current user's home/)
+  assert.match(stdout.text, /Run `llmwiki-bridge-start --path DIR` to scan a specific root/)
 })
 
 test('quickstart discovery prompt explains constrained roots without the home-scan warning', async () => {
@@ -86,9 +88,12 @@ test('quickstart discovery prompt explains constrained roots without the home-sc
   assert(stdout.text.includes(root))
   assert.equal(prompts.length, 1)
   assert.match(prompts[0].question, /Discovery is constrained to the root\(s\) shown above/)
-  assert.match(prompts[0].question, /Auto-discover local LLMWiki\/knowledge source folders\?\nDiscovery is constrained/)
+  assert.match(prompts[0].question, /Find LLMWiki\/knowledge source folders under the shown root\(s\)\?\nDiscovery is constrained/)
   assert.match(prompts[0].question, /\n\[Y\/n\]: $/)
   assert.doesNotMatch(prompts[0].question, /current user's home/)
+  assert.doesNotMatch(prompts[0].question, /Auto-discover/)
+  assert.match(stdout.text, /Rerun quickstart when you want to scan the shown root\(s\)/)
+  assert.doesNotMatch(stdout.text, /Run `llmwiki-bridge-start --path DIR` to scan a specific root/)
 })
 
 test('quickstart reprompts invalid yes/no answers in interactive prompt fallback', async () => {
@@ -162,7 +167,8 @@ test('quickstart TTY yes/no uses immediate clack confirm and direct discovery pr
 
   assert.equal(result.autoDiscover, true)
   assert.equal(confirmCalls.length, 1)
-  assert.match(confirmCalls[0].message, /Auto-discover local LLMWiki\/knowledge source folders\?/)
+  assert.match(confirmCalls[0].message, /Find LLMWiki\/knowledge source folders under the shown root\(s\)\?/)
+  assert.doesNotMatch(confirmCalls[0].message, /Auto-discover/)
   assert.equal(confirmCalls[0].initialValue, true)
   assert.equal(confirmCalls[0].input, stdin)
   assert.equal(confirmCalls[0].output, stdout)
@@ -353,6 +359,51 @@ test('startSources waits for source /health before marking a source ready', asyn
   const config = JSON.parse(readFileSync(configPath, 'utf8'))
   assert.equal(config.sources[0].status, 'ready')
   assert.equal(config.sources[0].health.ok, true)
+})
+
+test('startSources advances past an occupied requested port before checking readiness', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-start-occupied-port-'))
+  const source = join(root, 'wiki')
+  mkdirSync(source)
+  const { server: existingServer, port: occupiedPort, nextPort } = await occupyHealthPortWithNextAvailable()
+  const portFile = join(root, 'serve-port.txt')
+  const serveScript = writeServeStubScript(root, { portFile })
+  const configPath = join(root, 'sources.json')
+
+  t.after(async () => {
+    await closeServer(existingServer)
+  })
+
+  const result = await startSources({
+    paths: [source],
+    portStart: occupiedPort,
+    serveInvocation: { command: process.execPath, baseArgs: [serveScript], cwd: root },
+    configPath,
+    logDir: join(root, 'logs'),
+    healthTimeoutMs: 2000,
+    healthIntervalMs: 50,
+  })
+
+  const pid = result.sources[0].processId
+  t.after(() => {
+    killPid(pid)
+  })
+
+  assert.equal(result.sources[0].status, 'ready')
+  assert.equal(result.sources[0].url, `http://127.0.0.1:${nextPort}`)
+  assert.notEqual(result.sources[0].url, `http://127.0.0.1:${occupiedPort}`)
+  assert.equal(readFileSync(portFile, 'utf8'), String(nextPort))
+
+  const existingHealth = await fetch(`http://127.0.0.1:${occupiedPort}/health`)
+  assert.equal(existingHealth.status, 200)
+  assert.equal((await existingHealth.json()).status, 'existing')
+
+  const startedHealth = await fetch(`${result.sources[0].url}/health`)
+  assert.equal(startedHealth.status, 200)
+  assert.equal((await startedHealth.json()).status, 'ok')
+
+  const config = JSON.parse(readFileSync(configPath, 'utf8'))
+  assert.equal(config.sources[0].url, `http://127.0.0.1:${nextPort}`)
 })
 
 test('startSources cleans up a spawned source when /health never becomes ready', async (t) => {
@@ -553,6 +604,58 @@ test('quickstart skip-bridge handoff lists one MCP stream URL for every started 
   assert.doesNotMatch(stdout.text, /health URL:/)
   assert.doesNotMatch(stdout.text, /manifest URL:/)
   assert.doesNotMatch(stdout.text, /MCP JSON-RPC URL/)
+})
+
+test('quickstart prints an info line when source startup falls back to another port', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'n']
+  const candidates = [
+    { rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', port: '12001', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+      async validateCandidate(candidate) {
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'first-wiki',
+            title: 'First Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:12002',
+            requestedPort: 12001,
+            port: 12002,
+            portFallback: { requestedPort: 12001, assignedPort: 12002, reason: 'requested-port-occupied' },
+          }],
+        }
+      },
+    },
+  )
+
+  assert.deepEqual(result.sourceUrls, ['http://127.0.0.1:12002'])
+  assert.deepEqual(calls.find((call) => call[0] === 'start')[1].ports, [12001])
+  assert.match(stdout.text, /\[info\] Requested port 12001 was occupied; started First Wiki on 12002\./)
 })
 
 test('quickstart hides additional candidates by default and selects only recommended sources', async () => {
@@ -1314,7 +1417,15 @@ test('quickstart registers started sources after starting bridge and passing hea
         return {
           bridgeUrl: args.bridgeUrl,
           replace: args.replace,
-          payload: { sources: [{ id: 'first-wiki', url: 'http://127.0.0.1:11001' }] },
+          payload: {
+            sources: [
+              { id: 'existing-one', selected: false, url: 'http://127.0.0.1:12001' },
+              { id: 'existing-two', selected: false, url: 'http://127.0.0.1:12002' },
+              { id: 'first-wiki', selected: true, url: 'http://127.0.0.1:11001' },
+              { id: 'existing-three', selected: false, url: 'http://127.0.0.1:12003' },
+              { id: 'existing-four', selected: false, url: 'http://127.0.0.1:12004' },
+            ],
+          },
           response: { ok: true },
         }
       },
@@ -1346,7 +1457,77 @@ test('quickstart registers started sources after starting bridge and passing hea
   assert.deepEqual([...calls.find((call) => call[0] === 'register')[1].selectedIds], ['first-wiki'])
   assert.equal(calls.find((call) => call[0] === 'register')[1].configPath, result.started.configPath)
   assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
+  assert.match(stdout.text, /Registered 5 total bridge source\(s\); 1 selected for this quickstart\. Register merges by default unless --replace is set\./)
   assert.deepEqual(result.skipped, [])
+})
+
+test('quickstart prints final bridge handoff after successful smoke', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', '1']
+  const bridgeUrl = 'http://127.0.0.1:8788'
+
+  const result = await quickstart(
+    { path: '.', bridge: bridgeUrl },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      async checkBridgeHealth(url) {
+        return { ok: true, status: 'ok', url }
+      },
+      async registerSources(args) {
+        return {
+          bridgeUrl: args.bridgeUrl,
+          replace: args.replace,
+          payload: { sources: [{ id: 'first-wiki', selected: true, url: 'http://127.0.0.1:11001' }] },
+          response: { ok: true },
+        }
+      },
+      async selectBridgeSmokeMode() {
+        return { mode: 'evidence-only', reason: 'test bridge settings' }
+      },
+      async smokeBridge(args) {
+        return { bridgeUrl: args.bridgeUrl, mode: args.mode, status: { state: 'completed' }, text: '' }
+      },
+    },
+  )
+
+  assert.deepEqual(result.skipped, [])
+  assert.match(stdout.text, /Smoke complete: completed/)
+  const handoffStart = stdout.text.indexOf('Bridge handoff:')
+  assert.notEqual(handoffStart, -1)
+  const handoff = stdout.text.slice(handoffStart)
+  assert.match(handoff, /Bridge base URL: http:\/\/127\.0\.0\.1:8788/)
+  assert.match(handoff, /A2A-style answer endpoint: POST http:\/\/127\.0\.0\.1:8788\/message:send/)
+  assert.match(handoff, /MCP-style JSON-RPC endpoint: POST http:\/\/127\.0\.0\.1:8788\/mcp/)
+  assert.match(handoff, /Settings UI: http:\/\/127\.0\.0\.1:8788\/settings/)
+  assert.match(handoff, /Use the endpoint your agent or script supports; exact client configuration syntax varies by client\./)
+  assert.doesNotMatch(handoff, /Streamable HTTP/)
+  assert.doesNotMatch(handoff, /mcp\/stream/)
 })
 
 test('quickstart applies Hermes runtime settings to an already running bridge', async () => {
@@ -1400,7 +1581,6 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
         return {
           bridgeUrl: args.bridgeUrl,
           replace: args.replace,
-          payload: { sources: [{ id: 'first-wiki', url: 'http://127.0.0.1:11001' }] },
           response: { ok: true },
         }
       },
@@ -1427,6 +1607,7 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
   assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.profile, 'hermes')
   assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
+  assert.match(stdout.text, /Registered 1 total bridge source\(s\); 1 selected for this quickstart/)
   assert.match(stdout.text, /No repo-confirmed auto-install command for Hermes was found/)
   assert.match(stdout.text, /Applying runtime settings to the running bridge/)
 })
@@ -1684,6 +1865,7 @@ test('quickstart labels requested hybrid bridge smoke mode as hybrid', async () 
 
   assert.equal(result.smokeMode, 'hybrid')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'hybrid')
+  assert.match(stdout.text, /Registered 1 total bridge source\(s\); 1 selected for this quickstart/)
   assert.match(stdout.text, /Running bridge smoke in hybrid mode/)
 })
 
@@ -2694,7 +2876,7 @@ function ttyReadable() {
   return stream
 }
 
-function writeServeStubScript(root, { neverHealthy = false, pidFile = '' } = {}) {
+function writeServeStubScript(root, { neverHealthy = false, pidFile = '', portFile = '' } = {}) {
   const script = join(root, `serve-stub-${neverHealthy ? 'unhealthy' : 'ready'}.mjs`)
   writeFileSync(script, `import { writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -2726,6 +2908,10 @@ if (${JSON.stringify(Boolean(neverHealthy))}) {
 } else {
   const host = args[args.indexOf('--host') + 1] || '127.0.0.1'
   const port = Number(args[args.indexOf('--port') + 1])
+  const portFile = ${JSON.stringify(portFile)}
+  if (portFile) {
+    writeFileSync(portFile, String(port))
+  }
   createServer((request, response) => {
     if (request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -2740,16 +2926,69 @@ if (${JSON.stringify(Boolean(neverHealthy))}) {
   return script
 }
 
+async function occupyHealthPortWithNextAvailable() {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const port = await freePort()
+    if (port >= 65535 || !await canListenOnPort(port + 1)) {
+      continue
+    }
+    const server = createServer((request, response) => {
+      if (request.url === '/health') {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ status: 'existing' }))
+        return
+      }
+      response.writeHead(404, { 'content-type': 'text/plain' })
+      response.end('not found')
+    })
+    try {
+      await listenOnPort(server, port)
+      return { server, port, nextPort: port + 1 }
+    } catch {
+      await closeServer(server)
+    }
+  }
+  throw new Error('Could not reserve adjacent test ports')
+}
+
 async function freePort() {
   const server = createServer()
-  await new Promise((resolveListen) => {
-    server.listen(0, '127.0.0.1', resolveListen)
-  })
+  await listenOnPort(server, 0)
   const { port } = server.address()
-  await new Promise((resolveClose) => {
-    server.close(resolveClose)
-  })
+  await closeServer(server)
   return port
+}
+
+async function canListenOnPort(port) {
+  const server = createServer()
+  try {
+    await listenOnPort(server, port)
+    return true
+  } catch {
+    return false
+  } finally {
+    await closeServer(server)
+  }
+}
+
+function listenOnPort(server, port) {
+  return new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen)
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', rejectListen)
+      resolveListen()
+    })
+  })
+}
+
+function closeServer(server) {
+  return new Promise((resolveClose) => {
+    try {
+      server.close(() => resolveClose())
+    } catch {
+      resolveClose()
+    }
+  })
 }
 
 async function waitForProcessExit(pid, timeoutMs) {
