@@ -87,10 +87,10 @@
 - Quickstart echoes selected source label(s) and full path(s) before
   validation/start, including defaulted first-candidate selection.
 - Quickstart TTY screen transitions clear only the visible terminal area, do
-  not emit a scrollback-clearing escape, redraw a compact wordmark at the top
-  of each focused screen, and reprint the selected source context on the
-  validation/start screen; redirected, non-TTY, and opted-out runs do not emit
-  screen clears or repeated wordmarks.
+  not emit a scrollback-clearing escape, redraw a compact `KBL / Knowledge
+  Bridge Labs` logo block at the top of each focused screen, and reprint the
+  selected source context on the validation/start screen; redirected, non-TTY,
+  and opted-out runs do not emit screen clears or repeated logo blocks.
 - Quickstart candidate display adds parent/project context for repeated
   visible `wiki` basenames and `.llmwiki-work` paths while preserving full path
   output.

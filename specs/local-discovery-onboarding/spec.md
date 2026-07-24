@@ -173,8 +173,8 @@ source server.
   terminal scrollback, and must be disabled by `--no-clear-screen` or
   `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1`. Redirected, piped, injected prompt,
   and non-TTY transcripts must remain stable. Each focused interactive screen
-  after a visible-screen transition should redraw a compact
-  `llmwiki-bridge-start` wordmark above the active question/step. After the
+  after a visible-screen transition should redraw a compact `KBL / Knowledge
+  Bridge Labs` logo block above the active question/step. After the
   source-selection screen is cleared, the validation/start screen must reprint
   the selected source label(s) and full local path(s).
 - After source startup approval, `quickstart` must show visible validation

@@ -104,8 +104,11 @@ const QUICKSTART_CLEAR_SCREEN_OPT_OUT_ENV = [
   'LLMWIKI_BRIDGE_START_NO_CLEAR',
   'LLMWIKI_QUICKSTART_NO_CLEAR_SCREEN',
 ]
-const QUICKSTART_LOGO_TITLE = 'llmwiki-bridge-start'
-const QUICKSTART_LOGO_SUBTITLE = 'local knowledge -> agent bridge'
+const QUICKSTART_LOGO_MARK = 'KBL'
+const QUICKSTART_LOGO_BRAND = 'Knowledge Bridge Labs'
+const QUICKSTART_LOGO_PRODUCT = 'llmwiki-bridge-start quickstart'
+const QUICKSTART_LOGO_BRIDGE = 'local knowledge  ==[ bridge ]==>  coding agents'
+const QUICKSTART_LOGO_WIDTH = 52
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
 const GENERIC_MARKDOWN_SCORE_CAP = 25
@@ -153,6 +156,7 @@ const ADDITIONAL_REASON_NOISY_PATH = 'noisy-path'
 const ANSI_CODES = {
   reset: '\u001b[0m',
   boldCyan: '\u001b[1;36m',
+  dim: '\u001b[2m',
   cyan: '\u001b[36m',
   green: '\u001b[32m',
   yellow: '\u001b[33m',
@@ -1361,12 +1365,20 @@ function optionDisablesScreenClear(value) {
 }
 
 function formatQuickstartBanner(ui) {
-  const title = `${QUICKSTART_LOGO_TITLE} quickstart`
-  const width = Math.max(title.length, QUICKSTART_LOGO_SUBTITLE.length) + 2
-  const border = `+${'-'.repeat(width)}+`
-  const titleLine = `| ${title.padEnd(width - 2)} |`
-  const subtitleLine = `| ${QUICKSTART_LOGO_SUBTITLE.padEnd(width - 2)} |`
-  return `${paint(ui, 'boldCyan', `${border}\n${titleLine}\n${subtitleLine}\n${border}`)}\n`
+  if (ui.screenTransitions) {
+    return formatQuickstartLogoBlock(ui)
+  }
+  return formatQuickstartCompactBanner(ui)
+}
+
+function formatQuickstartCompactBanner(ui) {
+  const padded = ` ${QUICKSTART_LOGO_PRODUCT} `
+  const border = `+${'-'.repeat(padded.length)}+`
+  return `${paint(ui, 'boldCyan', `${border}\n|${padded}|\n${border}`)}\n`
+}
+
+function formatQuickstartPageLogo(ui) {
+  return formatQuickstartLogoBlock(ui)
 }
 
 function writeQuickstartIntro(output, ui) {
@@ -1401,8 +1413,22 @@ function writeQuickstartPageLogo(output, ui) {
   output.write(formatQuickstartPageLogo(ui))
 }
 
-function formatQuickstartPageLogo(ui) {
-  return `${paint(ui, 'boldCyan', QUICKSTART_LOGO_TITLE)}\n${paint(ui, 'dim', QUICKSTART_LOGO_SUBTITLE)}\n`
+function formatQuickstartLogoBlock(ui) {
+  const border = `+${'-'.repeat(QUICKSTART_LOGO_WIDTH + 2)}+`
+  const brandLine = formatQuickstartLogoRow(`${QUICKSTART_LOGO_MARK}  ${QUICKSTART_LOGO_BRAND}`)
+  const bridgeLine = formatQuickstartLogoRow(`     ${QUICKSTART_LOGO_BRIDGE}`)
+  const productLine = formatQuickstartLogoRow(`     ${QUICKSTART_LOGO_PRODUCT}`)
+  return [
+    paint(ui, 'boldCyan', border),
+    paint(ui, 'boldCyan', brandLine),
+    paint(ui, 'dim', bridgeLine),
+    paint(ui, 'dim', productLine),
+    paint(ui, 'boldCyan', border),
+  ].join('\n') + '\n'
+}
+
+function formatQuickstartLogoRow(text) {
+  return `| ${String(text).padEnd(QUICKSTART_LOGO_WIDTH)} |`
 }
 
 function writeQuickstartScreenBreak(output, ui) {

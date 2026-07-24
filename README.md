@@ -60,9 +60,9 @@ details file reference. PIDs, log paths, and stop guidance are written to
 `.llmwiki-bridge-start/quickstart-handoff.md`. After you choose source folders,
 quickstart echoes the selected label and full path before validation/start. If
 stdin and stdout are both interactive TTYs, quickstart clears only the visible
-screen between major screens and redraws a compact `llmwiki-bridge-start`
-wordmark at the top of each focused screen; redirected/piped transcripts are
-unchanged. Use `--no-clear-screen` or
+screen between major screens and redraws a compact `KBL / Knowledge Bridge
+Labs` logo block at the top of each focused screen; redirected/piped
+transcripts are unchanged. Use `--no-clear-screen` or
 `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1` to keep all interactive screens
 visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
