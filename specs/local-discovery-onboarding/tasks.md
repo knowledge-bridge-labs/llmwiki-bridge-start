@@ -65,6 +65,8 @@
 - [x] Move quickstart final handoff PID/log rows into a saved
   `.llmwiki-bridge-start/quickstart-handoff.md` summary and leave stdout with
   compact endpoint/operational sections.
+- [x] Add TTY-only visible-screen quickstart transitions with selected-source
+  context preserved on validation/start and stable non-TTY transcripts.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

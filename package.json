@@ -51,6 +51,7 @@
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",
-    "cross-spawn": "^7.0.6"
+    "cross-spawn": "^7.0.6",
+    "sisteransi": "^1.0.5"
   }
 }

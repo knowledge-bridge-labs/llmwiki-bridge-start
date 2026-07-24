@@ -167,6 +167,14 @@ source server.
 - After source selection, `quickstart` must echo the selected source label(s)
   and full local path(s), including when the user accepts the default first
   candidate.
+- In interactive terminals, `quickstart` may clear the visible screen between
+  major screens to keep the current decision focused. This must happen only
+  when stdin and stdout are both TTYs and CI is not detected, must not clear
+  terminal scrollback, and must be disabled by `--no-clear-screen` or
+  `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1`. Redirected, piped, injected prompt,
+  and non-TTY transcripts must remain stable. After the source-selection screen
+  is cleared, the validation/start screen must reprint the selected source
+  label(s) and full local path(s).
 - After source startup approval, `quickstart` must show visible validation
   progress while `llmwiki-serve manifest` compatibility checks are actually
   running. TTY output should use the same spinner/progress style as discovery;

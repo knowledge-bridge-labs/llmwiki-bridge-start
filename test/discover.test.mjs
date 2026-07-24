@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
+import { cursor as ansiCursor, erase as ansiErase } from 'sisteransi'
 
 import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
 
@@ -13,6 +14,12 @@ test('parseArgs collects repeated options', () => {
   assert.equal(parsed.command, 'discover')
   assert.deepEqual(parsed.options.path, ['a', 'b'])
   assert.equal(parsed.options.validate, true)
+})
+
+test('parseArgs supports quickstart screen-clear opt-out flag', () => {
+  const parsed = parseArgs(['quickstart', '--no-clear-screen'])
+  assert.equal(parsed.command, 'quickstart')
+  assert.equal(parsed.options['clear-screen'], false)
 })
 
 test('runCli starts quickstart when no subcommand is provided', async () => {
@@ -175,6 +182,109 @@ test('quickstart TTY yes/no uses immediate clack confirm and direct discovery pr
   assert.match(stdout.text, /\[choice\] Selected: Yes/)
   assert.match(stdout.text, /\[run\] Discovery scans candidates without validation; validation runs only if you start selected sources\.\n\[run\] Searching local folders for LLMWiki candidates\.\.\.\n\[ok\] Discovery complete: found 0 candidate source folder\(s\)\./)
   assert.doesNotMatch(stdout.text, /\[Y\/n\]:/)
+})
+
+test('quickstart TTY screen transitions clear each major screen while preserving current-step context', async (t) => {
+  const previousNoColor = process.env.NO_COLOR
+  process.env.NO_COLOR = '1'
+  disableCiEnvironmentForTtyTest(t)
+  t.after(() => {
+    if (previousNoColor === undefined) {
+      delete process.env.NO_COLOR
+    } else {
+      process.env.NO_COLOR = previousNoColor
+    }
+  })
+
+  const runRoot = mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-screen-'))
+  const sourcePath = join(runRoot, 'interactive-wiki')
+  const stdout = captureTtyWritable()
+  const stdin = ttyReadable()
+  const confirmAnswers = [true, true, false]
+  const calls = []
+
+  const result = await quickstart(
+    { path: '.', config: join(runRoot, 'sources.json') },
+    {
+      stdin,
+      stdout,
+      stderr: stdout,
+      clackPrompts: {
+        async confirm(params) {
+          calls.push(['confirm', params.message])
+          return confirmAnswers.shift()
+        },
+        async multiselect(params) {
+          calls.push(['multiselect', params.message])
+          return [1]
+        },
+        isCancel() {
+          return false
+        },
+        cancel() {},
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: sourcePath, score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'Interactive Wiki', source_id: 'interactive-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'interactive-wiki', title: 'Interactive Wiki', path: sourcePath, protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+    },
+  )
+
+  const visibleClear = `${ansiCursor.up(23)}${ansiCursor.to(0)}${ansiErase.down()}`
+  assert.equal(countOccurrences(stdout.text, visibleClear), 3)
+  assert.doesNotMatch(stdout.text, /\u001b\[3J/)
+  assert.deepEqual(calls.map((call) => call[0]), ['confirm', 'discover', 'multiselect', 'confirm', 'validate', 'start', 'confirm'])
+  assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+
+  const validateScreenStart = stdout.text.indexOf('[3/5] Validate and start local sources')
+  assert.notEqual(validateScreenStart, -1)
+  const nextScreenStart = stdout.text.indexOf(visibleClear, validateScreenStart + 1)
+  const validateScreen = stdout.text.slice(validateScreenStart, nextScreenStart)
+  assert.match(validateScreen, /Selected source folder\(s\):/)
+  assert.match(validateScreen, /interactive-wiki \[Native LLMWiki\/OpenWiki\]/)
+  assert.match(validateScreen, new RegExp(sourcePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+})
+
+test('quickstart screen transitions stay disabled for redirected stdout even when stdin is TTY', async () => {
+  const stdout = captureWritable()
+  const stdin = Readable.from(['n\n'])
+  Object.defineProperty(stdin, 'isTTY', { value: true })
+  stdin.setRawMode = () => stdin
+
+  await quickstart(
+    {},
+    { stdin, stdout, stderr: stdout },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+    },
+  )
+
+  assert.doesNotMatch(stdout.text, /\u001b\[[0-9;]*J/)
+  assert.match(stdout.text, /\[\?\] Auto-discover local LLMWiki\/knowledge source folders\?\nDefault discovery scans the current user's home unless --path\/--workspace\/--cwd constrains it\.\n\[Y\/n\]:\n/)
+  assert.match(stdout.text, /\[choice\] Selected: No\n/)
 })
 
 test('quickstart discovery progress appends TTY heartbeat dots with an injected clock', () => {
@@ -1423,6 +1533,50 @@ test('quickstart uses clack multiselect for TTY candidate selection', async (t) 
   assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.equal(countOccurrences(stdout.text, 'Full local paths are shown for disambiguation; redact them before sharing CLI output.'), 1)
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
+})
+
+test('quickstart does not clear screens for redirected, non-TTY, or opted-out quickstart runs', async (t) => {
+  disableCiEnvironmentForTtyTest(t)
+
+  const redirectedStdout = captureWritable()
+  await runQuickstartScreenTransitionFixture({
+    stdin: ttyReadable(),
+    stdout: redirectedStdout,
+  })
+  assert(!redirectedStdout.text.includes(ansiErase.down()))
+  assert.match(redirectedStdout.text, /Selected source folder\(s\):/)
+
+  const nonTtyInputStdout = captureTtyWritable()
+  await runQuickstartScreenTransitionFixture({
+    stdin: nonTtyReadable(),
+    stdout: nonTtyInputStdout,
+  })
+  assert(!nonTtyInputStdout.text.includes(ansiErase.down()))
+
+  const optionOptOutStdout = captureTtyWritable()
+  await runQuickstartScreenTransitionFixture({
+    stdin: ttyReadable(),
+    stdout: optionOptOutStdout,
+    options: { 'clear-screen': false },
+  })
+  assert(!optionOptOutStdout.text.includes(ansiErase.down()))
+
+  const previousNoClear = process.env.LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN
+  process.env.LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN = '1'
+  t.after(() => {
+    if (previousNoClear === undefined) {
+      delete process.env.LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN
+    } else {
+      process.env.LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN = previousNoClear
+    }
+  })
+
+  const envOptOutStdout = captureTtyWritable()
+  await runQuickstartScreenTransitionFixture({
+    stdin: ttyReadable(),
+    stdout: envOptOutStdout,
+  })
+  assert(!envOptOutStdout.text.includes(ansiErase.down()))
 })
 
 test('quickstart TTY multiselect receives only recommended candidates by default', async (t) => {
@@ -3497,6 +3651,23 @@ function captureWritable() {
   return stream
 }
 
+function disableCiEnvironmentForTtyTest(t) {
+  const keys = ['CI', 'GITHUB_ACTIONS', 'TF_BUILD', 'BUILD_BUILDID']
+  const previous = new Map(keys.map((key) => [key, process.env[key]]))
+  for (const key of keys) {
+    delete process.env[key]
+  }
+  t.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  })
+}
+
 function captureTtyWritable() {
   const stream = captureWritable()
   Object.defineProperty(stream, 'isTTY', { value: true })
@@ -3512,6 +3683,85 @@ function ttyReadable() {
   Object.defineProperty(stream, 'isTTY', { value: true })
   stream.setRawMode = () => stream
   return stream
+}
+
+function nonTtyReadable() {
+  return new Readable({
+    read() {},
+  })
+}
+
+function noopProgress() {
+  return {
+    start() {},
+    stop() {},
+    error() {},
+  }
+}
+
+async function runQuickstartScreenTransitionFixture({ stdin = ttyReadable(), stdout = captureTtyWritable(), options = {} } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-screen-transition-'))
+  const sourcePath = join(root, 'screen-transition-wiki')
+  const configPath = join(root, 'sources.json')
+  const answers = ['y', '', 'y', 'n']
+  const candidate = {
+    rank: 1,
+    path: sourcePath,
+    score: 80,
+    confidence: 'high',
+    markdownCount: 20,
+    signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'],
+  }
+
+  const result = await quickstart(
+    { path: '.', config: configPath, ...options },
+    {
+      stdin,
+      stdout,
+      stderr: stdout,
+      createDiscoveryProgress: noopProgress,
+      createValidationProgress: noopProgress,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: 1, minScore: args.minScore, candidates: [candidate] }
+      },
+      async validateCandidate(selected) {
+        return {
+          ...selected,
+          startable: true,
+          manifest: {
+            title: 'Screen Transition Wiki',
+            source_id: 'screen-transition-wiki',
+            page_count: 1,
+            approved_page_count: 1,
+          },
+        }
+      },
+      async startSources(args) {
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'screen-transition-wiki',
+            title: 'Screen Transition Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            path: sourcePath,
+            url: 'http://127.0.0.1:11001',
+          }],
+        }
+      },
+    },
+  )
+
+  return { result, sourcePath }
 }
 
 function writeServeStubScript(root, { neverHealthy = false, pidFile = '', portFile = '' } = {}) {

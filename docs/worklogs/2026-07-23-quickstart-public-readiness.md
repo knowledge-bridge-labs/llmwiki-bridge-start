@@ -158,6 +158,12 @@ onboarding harness.
   `.llmwiki-bridge-start/quickstart-handoff.md` summary, while stdout prints a
   compact Operational details section with the summary file reference and
   fallback compact details only if the file cannot be written.
+- Follow-up on 2026-07-24: interactive TTY quickstart now uses the direct
+  `sisteransi` dependency to clear only the visible terminal area between major
+  decision screens. Non-TTY transcripts stay stable, scrollback is not cleared,
+  `--no-clear-screen` and `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1` opt out, and
+  the validation/start screen reprints the selected source label and full path
+  after the source-selection screen is cleared.
 
 ## Validation
 
@@ -281,6 +287,15 @@ onboarding harness.
     saved summary files contain the process IDs/log paths.
   - `npm run check` passed with syntax checks, 88 Node tests, and package
     dry-run.
+- Follow-up TTY screen transition dependency update:
+  - `sisteransi` is now a direct runtime dependency instead of an implicit
+    transitive dependency.
+  - TTY transition tests cover visible-screen clear behavior, selected-source
+    context preservation, no scrollback-clearing escape sequence, redirected
+    stdout, non-TTY input, CLI option opt-out, and environment opt-out.
+  - `npm test` passed with 92 Node tests.
+  - `npm run check` passed with syntax checks, 92 Node tests, and package
+    dry-run.
 
 ## Commits
 
@@ -302,8 +317,9 @@ onboarding harness.
 - `d5b245c` — Harden quickstart onboarding flow
 - `f6bb1eb` — Polish quickstart branch handoffs
 - `6a572e5` — Add active quickstart progress spinners
-- current — Harden quickstart runtime detection
-- current — Compact quickstart final handoff
+- `7b7074b` — Harden quickstart runtime detection
+- `4f1b723` — Compact quickstart final handoff
+- current — Add TTY quickstart screen transitions
 
 ## Follow-ups
 

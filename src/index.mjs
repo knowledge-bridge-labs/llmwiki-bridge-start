@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, spinner as clackSpinner } from '@clack/prompts'
 import crossSpawn from 'cross-spawn'
+import { cursor, erase } from 'sisteransi'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:8788'
@@ -25,6 +26,7 @@ const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
 const SOURCE_PORT_PROBE_MAX_ATTEMPTS = 200
 const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
 const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
+const DEFAULT_TERMINAL_ROW_FALLBACK = 1000
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS = 1500
@@ -95,6 +97,12 @@ const RUNTIME_SETUP_COMPAT_CHOICES = [
     model: 'local-model',
     profile: 'generic',
   },
+]
+const QUICKSTART_CLEAR_SCREEN_OPT_OUT_ENV = [
+  'LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN',
+  'LLMWIKI_BRIDGE_START_DISABLE_SCREEN_CLEAR',
+  'LLMWIKI_BRIDGE_START_NO_CLEAR',
+  'LLMWIKI_QUICKSTART_NO_CLEAR_SCREEN',
 ]
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
@@ -395,7 +403,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     ...commands,
   }
   const output = io.stdout || process.stdout
-  const ui = createQuickstartUi(io)
+  const ui = createQuickstartUi(io, options)
   const prompter = createQuickstartPrompter(io, { yes: boolOption(options.yes ?? options.y) })
   const bridgeUrl = stringOption(options.bridge, DEFAULT_BRIDGE_URL)
   const configPath = stringOption(options.config, defaultConfigPath())
@@ -486,9 +494,13 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
-    output.write(formatSelectedSourceEcho(selected, candidatePlan.visibleCandidates))
-
-    writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
+    if (ui.screenTransitions) {
+      writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
+      output.write(formatSelectedSourceEcho(selected, candidatePlan.visibleCandidates))
+    } else {
+      output.write(formatSelectedSourceEcho(selected, candidatePlan.visibleCandidates))
+      writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
+    }
     if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback?\nThis validates each selected folder first.`, true)) {
       writeStatus(output, ui, 'skip', 'Skipped source startup. No source servers were started.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
@@ -683,6 +695,7 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
     }
   }
 
+  writeQuickstartSubscreen(output, ui, 'Bridge runtime setup')
   writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
   output.write(formatRuntimeSetupChoices())
 
@@ -1168,6 +1181,7 @@ function mergeRuntimeSetupOptions(options = {}, runtimeSetup = null) {
 }
 
 async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridgeUrl, logDir }) {
+  writeQuickstartSubscreen(output, ui, 'Bridge process startup')
   const existingHealth = await runtime.checkBridgeHealth(bridgeUrl)
   const runtimeInfo = detectLlmRuntime(options)
   if (existingHealth.ok) {
@@ -1284,11 +1298,48 @@ async function maybeConfigureBridgeRuntime({ runtime, output, ui, prompter, brid
   }
 }
 
-function createQuickstartUi(io = {}) {
+function createQuickstartUi(io = {}, options = {}) {
+  const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
   return {
     color: Boolean(output.isTTY) && !process.env.NO_COLOR,
+    screenTransitions: shouldUseQuickstartScreenTransitions(io, options, input, output),
   }
+}
+
+function shouldUseQuickstartScreenTransitions(io = {}, options = {}, input = process.stdin, output = process.stdout) {
+  if (!input.isTTY || !output.isTTY || isCiEnvironment()) {
+    return false
+  }
+  if (quickstartScreenTransitionsDisabled(io, options, process.env)) {
+    return false
+  }
+  return true
+}
+
+function quickstartScreenTransitionsDisabled(io = {}, options = {}, env = process.env) {
+  if (io.disableScreenTransitions || io.disableClearScreen) {
+    return true
+  }
+  if (
+    optionDisablesScreenClear(options.clearScreen)
+    || optionDisablesScreenClear(options['clear-screen'])
+    || optionDisablesScreenClear(options.screenTransitions)
+    || optionDisablesScreenClear(options['screen-transitions'])
+    || boolOption(options.noClearScreen ?? options['no-clear-screen'])
+    || boolOption(options.noScreenTransitions ?? options['no-screen-transitions'])
+  ) {
+    return true
+  }
+  return QUICKSTART_CLEAR_SCREEN_OPT_OUT_ENV.some((key) => boolOption(env[key]))
+}
+
+function optionDisablesScreenClear(value) {
+  if (value === false) {
+    return true
+  }
+  const text = String(value ?? '').trim().toLowerCase()
+  return ['0', 'false', 'no', 'off', 'never'].includes(text)
 }
 
 function formatQuickstartBanner(ui) {
@@ -1305,8 +1356,33 @@ function writeQuickstartIntro(output, ui) {
 }
 
 function writeQuickstartStep(output, ui, index, total, title) {
+  if (index > 1) {
+    writeQuickstartScreenBreak(output, ui)
+  }
   output.write(`\n${paint(ui, 'boldCyan', `[${index}/${total}] ${title}`)}\n`)
   output.write(`${paint(ui, 'dim', '─'.repeat(50))}\n`)
+}
+
+function writeQuickstartSubscreen(output, ui, title) {
+  if (!ui.screenTransitions) {
+    return
+  }
+  writeQuickstartScreenBreak(output, ui)
+  output.write(`\n${paint(ui, 'boldCyan', title)}\n`)
+  output.write(`${paint(ui, 'dim', '─'.repeat(50))}\n`)
+}
+
+function writeQuickstartScreenBreak(output, ui) {
+  if (!ui.screenTransitions) {
+    return
+  }
+  output.write(formatQuickstartScreenBreak(output))
+}
+
+function formatQuickstartScreenBreak(output = process.stdout) {
+  const rows = positiveIntOption(output?.rows, DEFAULT_TERMINAL_ROW_FALLBACK)
+  const moveToVisibleTop = cursor.up(Math.max(1, rows - 1))
+  return `${moveToVisibleTop}${cursor.to(0)}${erase.down()}`
 }
 
 function writeStatus(output, ui, kind, message) {
@@ -4891,8 +4967,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes] [--no-clear-screen]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes] [--no-clear-screen]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -4908,6 +4984,7 @@ Commands:
   doctor    Check local tool and bridge readiness.
 
 Quickstart shows recommended LLMWiki source folders first; use --include-additional for advanced/lower-priority app vaults, examples, demos, and starter/e2e sources.
+Interactive TTY quickstart clears only the visible screen between screens; use --no-clear-screen or LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1 to keep all screens visible.
 Discovery defaults to the current user's home directory and hides low-confidence generic folders.
 Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.

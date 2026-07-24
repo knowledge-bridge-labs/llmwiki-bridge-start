@@ -59,6 +59,10 @@ per started source, then keeps the final screen concise with an operational
 details file reference. PIDs, log paths, and stop guidance are written to
 `.llmwiki-bridge-start/quickstart-handoff.md`. After you choose source folders,
 quickstart echoes the selected label and full path before validation/start. If
+stdin and stdout are both interactive TTYs, quickstart clears only the visible
+screen between major screens; redirected/piped transcripts are unchanged. Use
+`--no-clear-screen` or `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1` to keep all
+interactive screens visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
 `LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.1.0`;
