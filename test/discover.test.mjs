@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 
-import { configureBridgeRuntime, createQuickstartDiscoveryProgress, detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
+import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -206,6 +206,173 @@ test('quickstart discovery progress appends TTY heartbeat dots with an injected 
   assert.equal(intervals[0].ms, 25)
   assert.deepEqual(cleared, ['timer-1'])
   assert.equal(stdout.text, '[run] Searching local folders for LLMWiki candidates..\n[ok] Discovery complete: found 3 candidate source folder(s).\n')
+})
+
+test('quickstart discovery uses a timer spinner before slow discovery completes', async () => {
+  const stdout = captureTtyWritable()
+  const events = []
+  const spinnerFactory = (options) => ({
+    start(message) {
+      events.push(['spinner-start', options.indicator, message])
+    },
+    stop(message) {
+      events.push(['spinner-stop', message])
+    },
+    error(message) {
+      events.push(['spinner-error', message])
+    },
+    clear() {
+      events.push(['spinner-clear'])
+    },
+  })
+  const answers = ['y', 'q']
+
+  await quickstart(
+    { path: '.' },
+    {
+      stdout,
+      stderr: stdout,
+      forceDiscoveryHeartbeat: true,
+      clackPrompts: { spinner: spinnerFactory },
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        events.push(['discover-start', events.length])
+        assert.equal(events[0][0], 'spinner-start')
+        await new Promise((resolveTick) => {
+          setImmediate(resolveTick)
+        })
+        events.push(['discover-finish'])
+        return { roots: args.roots, count: 1, minScore: args.minScore, candidates: [{ rank: 1, path: 'slow-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }] }
+      },
+    },
+  )
+
+  assert.deepEqual(events.map((event) => event[0]), ['spinner-start', 'discover-start', 'discover-finish', 'spinner-stop'])
+  assert.equal(events[0][1], 'timer')
+  assert.equal(events[0][2], 'Searching local folders for LLMWiki candidates')
+  assert.equal(events[3][1], 'Discovery complete: found 1 candidate source folder(s).')
+})
+
+test('quickstart progress keeps transcript output when stdout is redirected even if stdin is TTY', () => {
+  const stdout = captureWritable()
+  const stdin = ttyReadable()
+  const progress = createQuickstartDiscoveryProgress({
+    stdin,
+    stdout,
+    clackPrompts: {
+      spinner() {
+        throw new Error('redirected stdout must not use an interactive spinner')
+      },
+    },
+  }, { color: false })
+
+  progress.start('Searching local folders for LLMWiki candidates...')
+  progress.stop('Discovery complete: found 2 candidate source folder(s).')
+
+  assert.equal(stdout.text, '[run] Searching local folders for LLMWiki candidates...\n[ok] Discovery complete: found 2 candidate source folder(s).\n')
+})
+
+test('quickstart validation progress appends TTY heartbeat dots with an injected clock', () => {
+  const stdout = captureTtyWritable()
+  const intervals = []
+  const cleared = []
+  const clock = {
+    setInterval(callback, ms) {
+      intervals.push({ callback, ms })
+      return `timer-${intervals.length}`
+    },
+    clearInterval(timer) {
+      cleared.push(timer)
+    },
+  }
+
+  const progress = createQuickstartValidationProgress({
+    stdout,
+    validationProgressClock: clock,
+    validationProgressIntervalMs: 25,
+  }, { color: false })
+
+  progress.start('Validating 2 selected candidate(s) with llmwiki-serve manifest.')
+  intervals[0].callback()
+  intervals[0].callback()
+  progress.stop()
+
+  assert.equal(intervals.length, 1)
+  assert.equal(intervals[0].ms, 25)
+  assert.deepEqual(cleared, ['timer-1'])
+  assert.equal(stdout.text, '[run] Validating 2 selected candidate(s) with llmwiki-serve manifest...\n')
+})
+
+test('quickstart validation uses a timer spinner before slow manifest validation completes', async () => {
+  const stdout = captureTtyWritable()
+  const events = []
+  const spinnerFactory = (options) => ({
+    start(message) {
+      events.push(['spinner-start', options.indicator, message])
+    },
+    stop(message) {
+      events.push(['spinner-stop', message])
+    },
+    error(message) {
+      events.push(['spinner-error', message])
+    },
+    clear() {
+      events.push(['spinner-clear'])
+    },
+  })
+  const answers = ['y', '1', 'y', 'n']
+
+  await quickstart(
+    { path: '.' },
+    {
+      stdout,
+      stderr: stdout,
+      forceValidationHeartbeat: true,
+      createDiscoveryProgress() {
+        return { start() {}, stop() {}, error() {} }
+      },
+      clackPrompts: { spinner: spinnerFactory },
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: 1, minScore: args.minScore, candidates: [{ rank: 1, path: 'slow-validate-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }] }
+      },
+      async validateCandidate(candidate) {
+        events.push(['validate-start', events.length])
+        assert.equal(events[0][0], 'spinner-start')
+        await new Promise((resolveTick) => {
+          setImmediate(resolveTick)
+        })
+        events.push(['validate-finish'])
+        return { ...candidate, startable: true, manifest: { title: 'Slow Validate Wiki', source_id: 'slow-validate-wiki', page_count: 1, approved_page_count: 1 } }
+      },
+      async startSources(args) {
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'slow-validate-wiki', title: 'Slow Validate Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+    },
+  )
+
+  assert.deepEqual(events.map((event) => event[0]), ['spinner-start', 'validate-start', 'validate-finish', 'spinner-clear'])
+  assert.equal(events[0][1], 'timer')
+  assert.equal(events[0][2], 'Validating 1 selected candidate(s) with llmwiki-serve manifest')
+  assert.match(stdout.text, /Slow Validate Wiki \(slow-validate-wiki\)/)
+  assert.match(stdout.text, /Coding-agent MCP registration URLs:/)
 })
 
 test('runCli keeps explicit discover as the scriptable listing command', async () => {
@@ -1676,6 +1843,9 @@ test('quickstart prints final bridge handoff after successful smoke', async () =
   const handoffStart = stdout.text.indexOf('Bridge handoff:')
   assert.notEqual(handoffStart, -1)
   const handoff = stdout.text.slice(handoffStart)
+  assert.match(handoff, /Bridge handoff:\n\n  Bridge\n/)
+  assert.match(handoff, /\n\n  Endpoints\n/)
+  assert.match(handoff, /\n\n  Settings\n/)
   assert.match(handoff, /Bridge base URL: http:\/\/127\.0\.0\.1:8788/)
   assert.match(handoff, /A2A-style answer endpoint: POST http:\/\/127\.0\.0\.1:8788\/message:send/)
   assert.match(handoff, /MCP-style JSON-RPC endpoint: POST http:\/\/127\.0\.0\.1:8788\/mcp/)

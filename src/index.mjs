@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect } from '@clack/prompts'
+import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, spinner as clackSpinner } from '@clack/prompts'
 import crossSpawn from 'cross-spawn'
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -19,6 +19,7 @@ const DEFAULT_MIN_SCORE = 30
 const FAST_DISCOVERY_EXTRA_DEPTH = 4
 const FAST_DISCOVERY_TIMEOUT_MS = 30000
 const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
+const ASYNC_DISCOVERY_YIELD_EVERY = 64
 const DEFAULT_SOURCE_HEALTH_TIMEOUT_MS = 15000
 const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
 const SOURCE_PORT_PROBE_MAX_ATTEMPTS = 200
@@ -489,8 +490,17 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       return result
     }
 
-    writeStatus(output, ui, 'run', `Validating ${selected.length} selected candidate(s) with llmwiki-serve manifest.`)
-    const validated = await Promise.all(selected.map((candidate) => runtime.validateCandidate(candidate, serveInvocation)))
+    const validationProgressFactory = io.createValidationProgress || createQuickstartValidationProgress
+    const validationProgress = validationProgressFactory(io, ui)
+    validationProgress.start(formatQuickstartValidationProgressMessage(selected.length))
+    let validated
+    try {
+      validated = await Promise.all(selected.map((candidate) => runtime.validateCandidate(candidate, serveInvocation)))
+      validationProgress.stop()
+    } catch (error) {
+      validationProgress.error('Validation failed before source startup.')
+      throw error
+    }
     result.validated = validated.map(summarizeCandidateForFlow)
     for (const candidate of validated) {
       const name = candidate.manifest?.title || basename(candidate.path)
@@ -1058,10 +1068,19 @@ function writeStatus(output, ui, kind, message) {
 }
 
 export function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstartUi(io)) {
+  return createQuickstartHeartbeatProgress(io, ui, { phase: 'discovery' })
+}
+
+export function createQuickstartValidationProgress(io = {}, ui = createQuickstartUi(io)) {
+  return createQuickstartHeartbeatProgress(io, ui, { phase: 'validation' })
+}
+
+function createQuickstartHeartbeatProgress(io = {}, ui = createQuickstartUi(io), { phase = 'discovery' } = {}) {
   const output = io.stdout || process.stdout
-  const useHeartbeat = shouldUseDiscoveryHeartbeat(io)
-  const intervalMs = positiveIntOption(io.discoveryProgressIntervalMs, DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS)
-  const clock = io.discoveryProgressClock || globalThis
+  const useHeartbeat = shouldUseProgressHeartbeat(io, phase)
+  const clackActivity = useHeartbeat ? createClackActivitySpinner(io, phase, output) : null
+  const intervalMs = positiveIntOption(io[`${phase}ProgressIntervalMs`] ?? io.progressIntervalMs, DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS)
+  const clock = io[`${phase}ProgressClock`] || io.progressClock || globalThis
   let timer = null
   let openLine = false
 
@@ -1086,15 +1105,31 @@ export function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstart
 
   function finish(kind, message) {
     clearTimer()
+    if (clackActivity) {
+      if (kind === 'fail') {
+        clackActivity.error(message || 'Failed.')
+      } else if (message) {
+        clackActivity.stop(message)
+      } else {
+        clackActivity.clear()
+      }
+      return
+    }
     if (openLine) {
       output.write('\n')
       openLine = false
     }
-    writeStatus(output, ui, kind, message)
+    if (message) {
+      writeStatus(output, ui, kind, message)
+    }
   }
 
   return {
     start(message = DEFAULT_DISCOVERY_PROGRESS_MESSAGE) {
+      if (clackActivity) {
+        clackActivity.start(formatSpinnerProgressMessage(message))
+        return
+      }
       if (useHeartbeat) {
         output.write(`${formatStatusMarker(ui, 'run')} ${message}`)
         openLine = true
@@ -1112,16 +1147,47 @@ export function createQuickstartDiscoveryProgress(io = {}, ui = createQuickstart
   }
 }
 
-function shouldUseDiscoveryHeartbeat(io = {}) {
-  if (io.forceDiscoveryHeartbeat) {
+function createClackActivitySpinner(io = {}, phase = 'discovery', output = process.stdout) {
+  if (io.forceDotHeartbeat || io[`force${capitalizeAscii(phase)}DotHeartbeat`]) {
+    return null
+  }
+  if (io[`${phase}ProgressClock`] || io.progressClock) {
+    return null
+  }
+  const spinnerFactory = io.clackPrompts
+    ? io.clackPrompts.spinner
+    : (io.clackSpinner || clackSpinner)
+  if (typeof spinnerFactory !== 'function') {
+    return null
+  }
+  try {
+    return spinnerFactory({
+      indicator: 'timer',
+      output,
+    })
+  } catch {
+    return null
+  }
+}
+
+function formatSpinnerProgressMessage(message) {
+  return String(message || '').replace(/\.+$/, '')
+}
+
+function shouldUseProgressHeartbeat(io = {}, phase = 'discovery') {
+  if (io[`force${capitalizeAscii(phase)}Heartbeat`] || io.forceProgressHeartbeat) {
     return true
   }
-  if (io.disableDiscoveryHeartbeat || isCiEnvironment()) {
+  if (io[`disable${capitalizeAscii(phase)}Heartbeat`] || io.disableProgressHeartbeat || isCiEnvironment()) {
     return false
   }
-  const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
-  return Boolean(input.isTTY || output.isTTY)
+  return Boolean(output.isTTY)
+}
+
+function capitalizeAscii(value) {
+  const text = String(value || '')
+  return `${text.slice(0, 1).toUpperCase()}${text.slice(1)}`
 }
 
 function isCiEnvironment() {
@@ -1133,6 +1199,10 @@ function formatQuickstartDiscoveryProgressSummary(discovery) {
     ? discovery.candidates.length
     : Number(discovery?.count || 0)
   return `Discovery complete: found ${count} candidate source folder(s).`
+}
+
+function formatQuickstartValidationProgressMessage(count) {
+  return `Validating ${count} selected candidate(s) with llmwiki-serve manifest.`
 }
 
 function formatStatusMarker(ui, kind) {
@@ -1340,10 +1410,17 @@ function formatBridgeHandoff(bridgeUrl) {
   const baseUrl = trimTrailingSlash(bridgeUrl)
   return [
     'Bridge handoff:',
-    `  - Bridge base URL: ${baseUrl}`,
-    `  - A2A-style answer endpoint: POST ${sourceEndpointUrl(baseUrl, '/message:send')}`,
-    `  - MCP-style JSON-RPC endpoint: POST ${sourceEndpointUrl(baseUrl, '/mcp')}`,
-    `  - Settings UI: ${sourceEndpointUrl(baseUrl, '/settings')}`,
+    '',
+    '  Bridge',
+    `    Bridge base URL: ${baseUrl}`,
+    '',
+    '  Endpoints',
+    `    A2A-style answer endpoint: POST ${sourceEndpointUrl(baseUrl, '/message:send')}`,
+    `    MCP-style JSON-RPC endpoint: POST ${sourceEndpointUrl(baseUrl, '/mcp')}`,
+    '',
+    '  Settings',
+    `    Settings UI: ${sourceEndpointUrl(baseUrl, '/settings')}`,
+    '',
     'Use the endpoint your agent or script supports; exact client configuration syntax varies by client.',
   ].join('\n') + '\n'
 }
@@ -1665,6 +1742,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   const clackPrompts = {
     confirm: io.clackPrompts?.confirm || clackConfirm,
     multiselect: io.clackPrompts?.multiselect || clackMultiselect,
+    spinner: io.clackPrompts?.spinner || clackSpinner,
     isCancel: io.clackPrompts?.isCancel || isClackCancel,
     cancel: io.clackPrompts?.cancel || clackCancel,
   }
@@ -2117,7 +2195,7 @@ export async function discoverCandidates({
   minScore = DEFAULT_MIN_SCORE,
   validate = false,
   serveInvocation = resolveServeInvocation({}),
-  scanner = scanCandidateDirectories,
+  scanner = scanCandidateDirectoriesAsync,
 } = {}) {
   const discovered = new Map()
   for (const root of roots || [homedir()]) {
@@ -2126,7 +2204,12 @@ export async function discoverCandidates({
       continue
     }
     const scannedDirectories = await Promise.resolve(scanner({ root: resolvedRoot, maxDepth, minScore }))
+    let scoredCount = 0
     for (const path of normalizeScannedCandidateDirectories(scannedDirectories, resolvedRoot, maxDepth)) {
+      scoredCount += 1
+      if (scoredCount % ASYNC_DISCOVERY_YIELD_EVERY === 0) {
+        await yieldToEventLoop()
+      }
       const scored = scoreCandidate(path)
       if (scored.score >= minScore) {
         addOrUpdateCandidate(discovered, scored)
@@ -2169,6 +2252,22 @@ export function scanCandidateDirectories({ root = homedir(), maxDepth = DEFAULT_
   return scanCandidateDirectoriesWithJavascript(resolvedRoot, maxDepth, minScore)
 }
 
+async function scanCandidateDirectoriesAsync({ root = homedir(), maxDepth = DEFAULT_MAX_DEPTH, minScore = DEFAULT_MIN_SCORE, preferExternalTools = true } = {}) {
+  const resolvedRoot = resolve(root)
+  if (!safeIsDirectory(resolvedRoot)) {
+    return []
+  }
+
+  if (preferExternalTools) {
+    const toolEntries = await scanCandidateDirectoryEntriesWithExternalToolAsync(resolvedRoot, maxDepth, minScore)
+    if (toolEntries !== null) {
+      return materializeCandidateDirectoriesAsync(toolEntries, resolvedRoot, maxDepth, minScore)
+    }
+  }
+
+  return scanCandidateDirectoriesWithJavascriptAsync(resolvedRoot, maxDepth, minScore)
+}
+
 function normalizeScannedCandidateDirectories(scannedDirectories, root, maxDepth) {
   const normalized = new Set()
   for (const entry of scannedDirectories || []) {
@@ -2193,6 +2292,26 @@ function scanCandidateDirectoryEntriesWithExternalTool(root, maxDepth, minScore)
   const rgCommand = findAvailableCommand(['rg'])
   if (rgCommand) {
     const rgEntries = scanCandidateDirectoryEntriesWithRipgrep(rgCommand, root, maxDepth, minScore)
+    if (rgEntries !== null) {
+      return rgEntries
+    }
+  }
+
+  return null
+}
+
+async function scanCandidateDirectoryEntriesWithExternalToolAsync(root, maxDepth, minScore) {
+  const fdCommand = await findAvailableCommandAsync(['fd', 'fdfind'])
+  if (fdCommand) {
+    const fdEntries = await scanCandidateDirectoryEntriesWithFdAsync(fdCommand, root, maxDepth, minScore)
+    if (fdEntries !== null) {
+      return fdEntries
+    }
+  }
+
+  const rgCommand = await findAvailableCommandAsync(['rg'])
+  if (rgCommand) {
+    const rgEntries = await scanCandidateDirectoryEntriesWithRipgrepAsync(rgCommand, root, maxDepth, minScore)
     if (rgEntries !== null) {
       return rgEntries
     }
@@ -2239,9 +2358,67 @@ function scanCandidateDirectoryEntriesWithFd(command, root, maxDepth, minScore) 
   ]
 }
 
+async function scanCandidateDirectoryEntriesWithFdAsync(command, root, maxDepth, minScore) {
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH + 2
+  const baseArgs = [
+    '--hidden',
+    '--no-ignore',
+    '--color',
+    'never',
+    '--max-depth',
+    String(scanDepth),
+    '--full-path',
+    ...fdExcludeArgs(),
+  ]
+  const fileLines = await runDiscoveryCommandLinesAsync(command, [
+    ...baseArgs,
+    '--type',
+    'f',
+    fdDiscoveryFilePattern({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (fileLines === null) {
+    return null
+  }
+  const directoryLines = await runDiscoveryCommandLinesAsync(command, [
+    ...baseArgs,
+    '--type',
+    'd',
+    fdDiscoveryDirectoryPattern({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (directoryLines === null) {
+    return null
+  }
+  return [
+    ...fileLines.map((path) => ({ path, type: 'file' })),
+    ...directoryLines.map((path) => ({ path, type: 'directory' })),
+  ]
+}
+
 function scanCandidateDirectoryEntriesWithRipgrep(command, root, maxDepth, minScore) {
   const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH + 2
   const lines = runDiscoveryCommandLines(command, [
+    '--files',
+    '--hidden',
+    '--no-ignore',
+    '--no-messages',
+    '--color',
+    'never',
+    '--max-depth',
+    String(scanDepth),
+    ...ripgrepGlobArgs({ includeGenericMarkdown: minScore <= 10 }),
+    '.',
+  ], root)
+  if (lines === null) {
+    return null
+  }
+  return lines.map((path) => ({ path, type: 'file' }))
+}
+
+async function scanCandidateDirectoryEntriesWithRipgrepAsync(command, root, maxDepth, minScore) {
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH + 2
+  const lines = await runDiscoveryCommandLinesAsync(command, [
     '--files',
     '--hidden',
     '--no-ignore',
@@ -2301,6 +2478,59 @@ function scanCandidateDirectoriesWithJavascript(root, maxDepth, minScore) {
   return materializeCandidateDirectories(entries, root, maxDepth, minScore)
 }
 
+async function scanCandidateDirectoriesWithJavascriptAsync(root, maxDepth, minScore) {
+  const entries = []
+  const markerCache = new Map()
+  const scanDepth = maxDepth + FAST_DISCOVERY_EXTRA_DEPTH
+  const stack = [{ path: root, depth: 0 }]
+  let visited = 0
+  while (stack.length) {
+    visited += 1
+    if (visited % ASYNC_DISCOVERY_YIELD_EVERY === 0) {
+      await yieldToEventLoop()
+    }
+
+    const current = stack.pop()
+    if (!current || current.depth > scanDepth || shouldSkipDir(current.path, current.depth === 0)) {
+      continue
+    }
+
+    if (hasImmediateCandidateMarker(current.path, markerCache, minScore)) {
+      entries.push({ path: current.path, type: 'directory' })
+    }
+
+    let children = []
+    try {
+      children = readdirSync(current.path, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    let childCount = 0
+    for (const child of children) {
+      childCount += 1
+      if (childCount % ASYNC_DISCOVERY_YIELD_EVERY === 0) {
+        await yieldToEventLoop()
+      }
+      const childPath = join(current.path, child.name)
+      if (child.isDirectory()) {
+        if (isDiscoveryDirectoryMarker(child.name, minScore)) {
+          entries.push({ path: childPath, type: 'directory' })
+        }
+        if (!shouldSkipDir(childPath) && current.depth < scanDepth) {
+          stack.push({ path: childPath, depth: current.depth + 1 })
+        }
+      } else if (child.isFile() && (
+        isDiscoveryFileMarker(child.name, minScore)
+        || (isMarkdownOrOrgFile(child.name) && LLMWIKI_TYPED_DIRS.includes(basename(current.path).toLowerCase()))
+      )) {
+        entries.push({ path: childPath, type: 'file' })
+      }
+    }
+  }
+  return materializeCandidateDirectoriesAsync(entries, root, maxDepth, minScore)
+}
+
 function materializeCandidateDirectories(entries, root, maxDepth, minScore) {
   const candidates = new Set()
   const markerCache = new Map()
@@ -2309,6 +2539,33 @@ function materializeCandidateDirectories(entries, root, maxDepth, minScore) {
   }
 
   for (const entry of entries) {
+    const path = resolveScannedPath(root, entry.path)
+    if (!isPathAtOrBelowRoot(path, root)) {
+      continue
+    }
+    if (entry.type === 'directory') {
+      addCandidateDirectoriesFromScannedDirectory(candidates, path, root, maxDepth, minScore, markerCache)
+    } else {
+      addCandidateDirectoriesFromScannedFile(candidates, path, root, maxDepth, minScore, markerCache)
+    }
+  }
+
+  return [...candidates].sort((left, right) => left.localeCompare(right))
+}
+
+async function materializeCandidateDirectoriesAsync(entries, root, maxDepth, minScore) {
+  const candidates = new Set()
+  const markerCache = new Map()
+  if (hasImmediateCandidateMarker(root, markerCache, minScore)) {
+    addCandidateDirectory(candidates, root, root, maxDepth)
+  }
+
+  let processed = 0
+  for (const entry of entries) {
+    processed += 1
+    if (processed % ASYNC_DISCOVERY_YIELD_EVERY === 0) {
+      await yieldToEventLoop()
+    }
     const path = resolveScannedPath(root, entry.path)
     if (!isPathAtOrBelowRoot(path, root)) {
       continue
@@ -2497,6 +2754,27 @@ function findAvailableCommand(commands) {
   return null
 }
 
+async function findAvailableCommandAsync(commands) {
+  for (const command of commands) {
+    if (COMMAND_AVAILABILITY.has(command)) {
+      if (COMMAND_AVAILABILITY.get(command)) {
+        return command
+      }
+      continue
+    }
+    const result = await runBufferedCommand(command, ['--version'], {
+      timeoutMs: 1500,
+      maxBuffer: 1024 * 1024,
+    })
+    const available = !result.error && result.status === 0
+    COMMAND_AVAILABILITY.set(command, available)
+    if (available) {
+      return command
+    }
+  }
+  return null
+}
+
 function runDiscoveryCommandLines(command, args, root) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -2504,6 +2782,22 @@ function runDiscoveryCommandLines(command, args, root) {
     maxBuffer: FAST_DISCOVERY_MAX_BUFFER,
     timeout: FAST_DISCOVERY_TIMEOUT_MS,
     windowsHide: true,
+  })
+  if (result.error || ![0, 1, 2].includes(result.status)) {
+    return null
+  }
+  return String(result.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => resolveScannedPath(root, line))
+}
+
+async function runDiscoveryCommandLinesAsync(command, args, root) {
+  const result = await runBufferedCommand(command, args, {
+    cwd: root,
+    maxBuffer: FAST_DISCOVERY_MAX_BUFFER,
+    timeoutMs: FAST_DISCOVERY_TIMEOUT_MS,
   })
   if (result.error || ![0, 1, 2].includes(result.status)) {
     return null
@@ -3715,6 +4009,81 @@ function delay(ms) {
   })
 }
 
+function yieldToEventLoop() {
+  return new Promise((resolveYield) => {
+    setImmediate(resolveYield)
+  })
+}
+
+function runBufferedCommand(command, args = [], { cwd = process.cwd(), timeoutMs = 0, maxBuffer = FAST_DISCOVERY_MAX_BUFFER } = {}) {
+  return new Promise((resolveCommand) => {
+    let child
+    try {
+      child = nodeSpawn(command, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      resolveCommand({ error, status: null, signal: null, stdout: '', stderr: '' })
+      return
+    }
+
+    let stdout = ''
+    let stderr = ''
+    let outputBytes = 0
+    let settled = false
+    let timeoutError = null
+    let bufferError = null
+    let timer = null
+
+    function settle(result) {
+      if (settled) {
+        return
+      }
+      settled = true
+      if (timer) {
+        clearTimeout(timer)
+      }
+      resolveCommand(result)
+    }
+
+    function appendOutput(kind, chunk) {
+      const value = chunk.toString()
+      if (kind === 'stdout') {
+        stdout += value
+      } else {
+        stderr += value
+      }
+      outputBytes += Buffer.byteLength(value)
+      if (!bufferError && outputBytes > maxBuffer) {
+        bufferError = Object.assign(new Error(`Command output exceeded ${maxBuffer} bytes`), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' })
+        child.kill('SIGTERM')
+      }
+    }
+
+    child.stdout?.on('data', (chunk) => appendOutput('stdout', chunk))
+    child.stderr?.on('data', (chunk) => appendOutput('stderr', chunk))
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timeoutError = Object.assign(new Error(`Command timed out after ${timeoutMs}ms`), { code: 'ETIMEDOUT' })
+        child.kill('SIGTERM')
+      }, timeoutMs)
+      if (typeof timer.unref === 'function') {
+        timer.unref()
+      }
+    }
+
+    child.on('error', (error) => {
+      settle({ error, status: null, signal: null, stdout, stderr })
+    })
+    child.on('close', (status, signal) => {
+      settle({ error: bufferError || timeoutError, status, signal, stdout, stderr })
+    })
+  })
+}
+
 function readSourceConfig(configPath) {
   if (!safeIsFile(configPath)) {
     throw new Error(`Source config not found: ${configPath}. Run start first or pass --source-url.`)
@@ -3775,11 +4144,10 @@ function splitCommandArgs(value) {
 }
 
 async function llmwikiServeJson(invocation, args, { timeoutMs }) {
-  const child = spawnSync(invocation.command, [...invocation.baseArgs, ...args], {
+  const child = await runBufferedCommand(invocation.command, [...invocation.baseArgs, ...args], {
     cwd: invocation.cwd,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    windowsHide: true,
+    timeoutMs,
+    maxBuffer: FAST_DISCOVERY_MAX_BUFFER,
   })
   if (child.error) {
     throw new Error(formatServeInvocationError(invocation, child.error))

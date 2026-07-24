@@ -144,8 +144,9 @@ source server.
   keypress immediately without requiring Enter. Non-TTY, piped, injected
   `io.prompt`, and `--yes` flows must keep their text/flag fallbacks.
 - After discovery approval, quickstart must show visible discovery progress:
-  a visible heartbeat/progress line in TTY terminals and clear
-  start/completion transcript lines in non-TTY output.
+  a visible spinner/progress line in TTY terminals and clear start/completion
+  transcript lines in non-TTY output. The progress indicator must be driven
+  while discovery is actually running, not printed only after completion.
 - `quickstart` must keep the default source selection list focused on
   recommended LLMWiki source folders: Native LLMWiki/OpenWiki projections and
   LLMWiki Markdown roots. Quickstart must explain that Native
@@ -166,6 +167,10 @@ source server.
 - After source selection, `quickstart` must echo the selected source label(s)
   and full local path(s), including when the user accepts the default first
   candidate.
+- After source startup approval, `quickstart` must show visible validation
+  progress while `llmwiki-serve manifest` compatibility checks are actually
+  running. TTY output should use the same spinner/progress style as discovery;
+  non-TTY output should keep stable transcript lines.
 - When visible candidates have repeated `wiki` basenames or live under
   `.llmwiki-work`, quickstart should add cheap parent/project context to the
   display label while preserving the full path line.
@@ -230,7 +235,9 @@ source server.
   final bridge handoff with the bridge base URL, A2A-style answer endpoint
   (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`), and
   settings UI (`/settings`). This bridge handoff must not describe the bridge
-  as MCP Streamable HTTP or use the direct-source `/mcp/stream` path.
+  as MCP Streamable HTTP or use the direct-source `/mcp/stream` path. The
+  handoff should be formatted as a readable grouped block rather than dense
+  adjacent URL lines.
 - Hermes and DeepAgents must be presented as first-class bridge runtime
   profiles. If the user already has one running, quickstart must collect its
   endpoint and model, then use the matching fixed runtime profile. If not,

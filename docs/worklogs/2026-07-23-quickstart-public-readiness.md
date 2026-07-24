@@ -235,6 +235,16 @@ onboarding harness.
   - `node --check test/discover.test.mjs` passed.
   - `node --test test/discover.test.mjs` passed with 81 Node tests.
   - `npm run check` passed with 81 Node tests plus package dry-run.
+- Follow-up progress/handoff UX polish:
+  - Discovery now uses async external `fd`/`rg` execution and async-yielding
+    fallback paths so a TTY timer spinner can update while scanning is running.
+  - Source manifest validation now runs through the same async command path and
+    shows a TTY progress indicator before validation completes.
+  - Non-TTY transcripts keep stable `[run]`/`[ok]` progress lines for logs and
+    automation.
+  - Final bridge handoff is formatted as grouped Bridge / Endpoints / Settings
+    sections instead of adjacent dense URL lines.
+  - `npm run check` passed with 84 Node tests plus package dry-run.
 
 ## Commits
 
@@ -253,7 +263,9 @@ onboarding harness.
 - `2ad3b87` — Add runtime onboarding to bridge quickstart
 - `fd8176c` — Focus runtime quickstart on Hermes and DeepAgents
 - `2abcece` — Select active quickstart sources on bridge register
-- pending — Harden quickstart port handling and handoff copy
+- `d5b245c` — Harden quickstart onboarding flow
+- `f6bb1eb` — Polish quickstart branch handoffs
+- pending — Add active quickstart progress spinner and grouped handoff output
 
 ## Follow-ups
 

@@ -54,6 +54,9 @@
   echo, concise lifecycle handoff copy with PIDs/log paths when available,
   clearer runtime endpoint default/skip prompts, and cheap repeated-`wiki`
   candidate context.
+- [x] Add active timer spinner/progress feedback during long discovery and
+  manifest validation phases, and format final bridge handoff as a readable
+  grouped block.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

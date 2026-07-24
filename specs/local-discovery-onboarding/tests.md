@@ -117,8 +117,12 @@
 - Quickstart TTY yes/no prompts route through an immediate keypress-capable
   confirm adapter so `y`/`n` completes without Enter, while injected prompt and
   non-TTY fallback paths remain text-based.
-- Quickstart discovery progress renders a visible TTY heartbeat/progress line
-  and records clear non-TTY start/completion transcript lines.
+- Quickstart discovery progress renders a visible TTY timer spinner/progress
+  line before slow discovery completes and records clear non-TTY
+  start/completion transcript lines.
+- Quickstart validation progress renders a visible TTY timer spinner/progress
+  line before slow `llmwiki-serve manifest` validation completes while keeping
+  non-TTY output stable.
 - Quickstart bridge setup copy explains bridge purpose and direct MCP skip
   behavior before asking, and the background-start question says that
   quickstart will run the command detached, write logs, and wait for health.
@@ -158,9 +162,9 @@
   requested port, source title/id, and assigned port.
 - Quickstart bridge success handoff: after registration and smoke, the
   transcript lists bridge base URL, `POST /message:send`, `POST /mcp`, and
-  `/settings` without describing the bridge as MCP Streamable HTTP or using
-  `/mcp/stream`, then includes lifecycle copy for started local source/bridge
-  processes with PIDs/log paths when available.
+  `/settings` as a readable grouped block without describing the bridge as MCP
+  Streamable HTTP or using `/mcp/stream`, then includes lifecycle copy for
+  started local source/bridge processes with PIDs/log paths when available.
 - Bridge start uses the `cross-spawn` adapter directly for package commands,
   including Windows `.cmd` command names, without a hand-written `cmd.exe`
   wrapper.
