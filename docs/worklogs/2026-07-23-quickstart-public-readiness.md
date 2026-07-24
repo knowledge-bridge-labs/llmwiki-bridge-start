@@ -141,9 +141,8 @@ onboarding harness.
   URLs visible meanwhile.
 - Follow-up on 2026-07-24: quickstart now echoes selected source labels and
   full paths after selection, adds bounded parent/project context for repeated
-  visible `wiki` basenames and `.llmwiki-work` paths, and prints concise
-  lifecycle notes after direct-source and bridge handoffs with PIDs/log paths
-  when available.
+  visible `wiki` basenames and `.llmwiki-work` paths, and prints compact
+  operational details after direct-source and bridge handoffs.
 - Follow-up on 2026-07-24: Hermes/DeepAgents endpoint prompts now state that
   blank Enter uses a shown default, while `skip` forces evidence-only; when no
   default is shown, blank Enter or `skip` continues evidence-only.
@@ -154,6 +153,11 @@ onboarding harness.
   install detection uses `dcode --version`; quickstart deliberately does not
   infer a bridge runtime endpoint from `dcode` config until a supported local
   endpoint discovery contract is documented.
+- Follow-up on 2026-07-24: final quickstart handoffs now keep the screen
+  focused on endpoints and next actions. PID/log rows move into the generated
+  `.llmwiki-bridge-start/quickstart-handoff.md` summary, while stdout prints a
+  compact Operational details section with the summary file reference and
+  fallback compact details only if the file cannot be written.
 
 ## Validation
 
@@ -249,8 +253,8 @@ onboarding harness.
     shows a TTY progress indicator before validation completes.
   - Non-TTY transcripts keep stable `[run]`/`[ok]` progress lines for logs and
     automation.
-  - Final bridge handoff is formatted as grouped Bridge / Endpoints / Settings
-    sections instead of adjacent dense URL lines.
+  - Final bridge handoff is formatted as a grouped endpoint section instead of
+    adjacent dense URL lines.
   - `npm run check` passed with 84 Node tests plus package dry-run.
 - Follow-up runtime default hardening:
   - `HERMES_BASE_URL` is treated as a legacy/user-local compatibility alias,
@@ -266,6 +270,17 @@ onboarding harness.
     directly (`hermes --version`, `dcode --version`) and includes Hermes health
     probe coverage.
   - `npm run check` passed with 88 Node tests plus package dry-run.
+- Follow-up final handoff UX cleanup:
+  - Quickstart now follows the requested OpenClaw/NemoClaw-style pattern: keep
+    the final screen focused on endpoint handoff, process summary, details-file
+    reference, and next action.
+  - Direct-source, deferred bridge, and successful bridge handoffs keep PID/log
+    rows out of stdout and write full source/bridge PID, log path, URL, and stop
+    guidance details to `.llmwiki-bridge-start/quickstart-handoff.md`.
+  - Tests assert the compact stdout Operational details section and verify that
+    saved summary files contain the process IDs/log paths.
+  - `npm run check` passed with syntax checks, 88 Node tests, and package
+    dry-run.
 
 ## Commits
 
@@ -288,6 +303,7 @@ onboarding harness.
 - `f6bb1eb` — Polish quickstart branch handoffs
 - `6a572e5` — Add active quickstart progress spinners
 - current — Harden quickstart runtime detection
+- current — Compact quickstart final handoff
 
 ## Follow-ups
 

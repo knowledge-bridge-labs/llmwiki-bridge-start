@@ -55,8 +55,9 @@ loopback source URLs to answer health checks, then explains that those URLs can
 be used directly without
 `llmwiki-agent-bridge`. Bridge setup is optional: if you skip it, quickstart
 prints one coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`)
-per started source and notes that started local processes remain running, with
-PIDs and log paths when available. After you choose source folders,
+per started source, then keeps the final screen concise with an operational
+details file reference. PIDs, log paths, and stop guidance are written to
+`.llmwiki-bridge-start/quickstart-handoff.md`. After you choose source folders,
 quickstart echoes the selected label and full path before validation/start. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
@@ -87,9 +88,10 @@ approval. Once a bridge is running, it merge-registers the started sources and
 runs an A2A-style smoke request. After a successful bridge smoke, quickstart
 prints a concise bridge handoff with the bridge base URL, A2A-style answer
 endpoint (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`),
-settings UI (`/settings`), and a lifecycle note for started local source/bridge
-processes with PIDs and log paths when available. The bridge endpoint handoff
-is separate from direct source MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
+settings UI (`/settings`), and a compact operational details section that
+points to `.llmwiki-bridge-start/quickstart-handoff.md` for PIDs, log paths,
+and stop guidance. The bridge endpoint handoff is separate from direct source
+MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
 endpoint is configured through flags, quickstart treats it as a preconfigured
 compatibility path without adding it to the interactive first-run menu.
 

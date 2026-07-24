@@ -179,10 +179,13 @@ source server.
   optional.
 - After starting selected sources, `quickstart` must state that direct source
   endpoints are healthy and remain usable if the user skips bridge setup.
-- Direct-source and bridge completion handoffs must mention that started local
-  process(es) remain running after quickstart exits, include PIDs and log paths
-  when available, and provide safe next-action/stop guidance that does not ask
-  users to kill by broad process name or port.
+- Direct-source and bridge completion handoffs must keep the final screen
+  concise: show the endpoint/next-action decision first, then a clearly
+  separated compact operational details section. PIDs, full log paths, and stop
+  guidance must be written to a saved handoff file, normally
+  `.llmwiki-bridge-start/quickstart-handoff.md`; if the summary cannot be
+  written, quickstart may show a compact fallback detail block. Stop guidance
+  must not ask users to kill by broad process name or port.
 - Before asking about bridge setup, `quickstart` must explain what
   `llmwiki-agent-bridge` adds, when it is useful, and that skipping it still
   leaves direct MCP Streamable HTTP source URLs ready to use. Bridge setup
@@ -236,8 +239,8 @@ source server.
   (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`), and
   settings UI (`/settings`). This bridge handoff must not describe the bridge
   as MCP Streamable HTTP or use the direct-source `/mcp/stream` path. The
-  handoff should be formatted as a readable grouped block rather than dense
-  adjacent URL lines.
+  handoff should be concise and grouped separately from operational process
+  details.
 - Hermes and DeepAgents must be presented as first-class bridge runtime
   profiles. If the user already has one running, quickstart must collect its
   endpoint and model, then use the matching fixed runtime profile. If not,

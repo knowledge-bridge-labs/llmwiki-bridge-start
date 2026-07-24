@@ -51,9 +51,9 @@
   endpoint handoff copy.
 - [x] Implement branch-by-branch expert-evaluation onboarding fixes: custom
   bridge manual-start env examples for requested host/port, source selection
-  echo, concise lifecycle handoff copy with PIDs/log paths when available,
-  clearer runtime endpoint default/skip prompts, and cheap repeated-`wiki`
-  candidate context.
+  echo, compact operational handoff copy with saved PID/log details, clearer
+  runtime endpoint default/skip prompts, and cheap repeated-`wiki` candidate
+  context.
 - [x] Add active timer spinner/progress feedback during long discovery and
   manifest validation phases, and format final bridge handoff as a readable
   grouped block.
@@ -62,6 +62,9 @@
 - [x] Check runtime framework installation with framework-supported CLI
   entrypoints (`hermes --version`, `dcode --version`) and avoid inferring a
   DeepAgents bridge endpoint without a documented endpoint discovery contract.
+- [x] Move quickstart final handoff PID/log rows into a saved
+  `.llmwiki-bridge-start/quickstart-handoff.md` summary and leave stdout with
+  compact endpoint/operational sections.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

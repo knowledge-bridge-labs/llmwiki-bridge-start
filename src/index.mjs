@@ -414,6 +414,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     registered: null,
     smoked: null,
     smokeMode: null,
+    runSummary: null,
     skipped: [],
   }
 
@@ -538,8 +539,13 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'info', 'If you skip bridge setup, the direct MCP Streamable HTTP URL(s) printed below are ready to use.')
     if (!await confirmQuickstart(prompter, `Set up llmwiki-agent-bridge as one endpoint for the selected source(s)?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL(s).`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
+      result.runSummary = writeQuickstartRunSummary({
+        sources: result.started.sources,
+        configPath: result.started.configPath,
+        mode: 'direct',
+      })
       output.write(formatCodingAgentRegistrationHandoff(result.started.sources))
-      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, mode: 'direct' }))
+      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, mode: 'direct', runSummary: result.runSummary }))
       result.skipped.push('bridge-setup', 'register', 'smoke')
       return result
     }
@@ -568,8 +574,15 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 
     if (result.bridgeSetup.continueToBridge === false) {
       writeStatus(output, ui, 'skip', 'Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.')
+      result.runSummary = writeQuickstartRunSummary({
+        sources: result.started.sources,
+        bridgeSetup: result.bridgeSetup,
+        bridgeUrl,
+        configPath: result.started.configPath,
+        mode: 'deferred-bridge',
+      })
       output.write(formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources: result.started.sources }))
-      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'deferred-bridge' }))
+      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'deferred-bridge', runSummary: result.runSummary }))
       result.skipped.push('register', 'smoke')
       return result
     }
@@ -595,8 +608,18 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       mode: smokePlan.mode,
     })
     writeStatus(output, ui, 'ok', `Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}`)
+    result.runSummary = writeQuickstartRunSummary({
+      sources: result.started.sources,
+      bridgeSetup: result.bridgeSetup,
+      bridgeUrl,
+      configPath: result.started.configPath,
+      registered: result.registered,
+      smokeMode: result.smokeMode,
+      smoked: result.smoked,
+      mode: 'bridge',
+    })
     output.write(formatBridgeHandoff(bridgeUrl))
-    output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'bridge' }))
+    output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'bridge', runSummary: result.runSummary }))
     return result
   } finally {
     prompter.close()
@@ -1283,6 +1306,7 @@ function writeQuickstartIntro(output, ui) {
 
 function writeQuickstartStep(output, ui, index, total, title) {
   output.write(`\n${paint(ui, 'boldCyan', `[${index}/${total}] ${title}`)}\n`)
+  output.write(`${paint(ui, 'dim', '─'.repeat(50))}\n`)
 }
 
 function writeStatus(output, ui, kind, message) {
@@ -1549,18 +1573,8 @@ function formatCodingAgentRegistrationHandoff(sources = []) {
   ].join('\n') + '\n'
 }
 
-function formatLocalProcessLifecycleNote({ sources = [], bridgeSetup = null, mode = 'direct' } = {}) {
-  const rows = []
-  for (const source of sources) {
-    rows.push(`  - Source ${sourceDisplayName(source)}: ${formatProcessDetail(source)}`)
-  }
-  if (bridgeSetup) {
-    const bridgeDetail = bridgeSetup.executed
-      ? formatProcessDetail(bridgeSetup)
-      : 'already running or manually started; PID/log path not captured by quickstart'
-    rows.push(`  - Bridge ${bridgeSetup.bridgeUrl || ''}: ${bridgeDetail}`.trimEnd())
-  }
-  if (!rows.length) {
+function formatLocalProcessLifecycleNote({ sources = [], bridgeSetup = null, mode = 'direct', runSummary = null } = {}) {
+  if (!sources.length && !bridgeSetup) {
     return ''
   }
   const nextStep = mode === 'bridge'
@@ -1568,12 +1582,154 @@ function formatLocalProcessLifecycleNote({ sources = [], bridgeSetup = null, mod
     : mode === 'deferred-bridge'
       ? 'Safe next step: start the bridge with a manual example above, then run the register/smoke commands shown above.'
     : 'Safe next step: use the MCP registration URL(s) above, or rerun with --setup-bridge when you want one bridge endpoint.'
-  return [
-    'Lifecycle note: started local process(es) remain running after quickstart exits.',
-    ...rows,
+  const bridgeState = bridgeSetup
+    ? bridgeSetup.executed
+      ? 'started by quickstart'
+      : 'already running or manually started'
+    : 'not used'
+  const detailsLine = runSummary?.path
+    ? formatDisplayPath(runSummary.path)
+    : runSummary?.error
+      ? `not written (${runSummary.error})`
+      : 'not written'
+  const rows = [
+    ['Started source servers', String(sources.length)],
+    ['Bridge process', bridgeState],
+    ['Details file', detailsLine],
+  ]
+  const bodyLines = []
+  if (runSummary?.path) {
+    bodyLines.push('Processes stay running after exit; full PIDs/logs are in the details file.')
+  } else {
+    bodyLines.push('Processes stay running after exit; summary file was not written.')
+    bodyLines.push('Compact process details:')
+    bodyLines.push(...formatCompactProcessDetailRows({ sources, bridgeSetup }))
+  }
+  return formatSummaryCard('Operational details', rows, { bodyLines }) + [
     nextStep,
-    'To stop later, stop only the exact PID(s) shown with your OS process manager, or stop the terminal/process you started manually.',
+    runSummary?.path
+      ? 'To stop later, use the exact PID(s) in the details file or stop the terminal/process you started manually.'
+      : 'To stop later, stop only the exact PID(s) shown above or stop the terminal/process you started manually.',
   ].join('\n') + '\n'
+}
+
+function formatKeyValueRows(rows = [], { indent = '  ', labelWidth = 24 } = {}) {
+  return rows.map(([label, value]) => `${indent}${String(label).padEnd(labelWidth)}${value}`)
+}
+
+function formatSummaryCard(title, rows = [], { bodyLines = [] } = {}) {
+  const bar = `  ${'─'.repeat(50)}`
+  return [
+    title,
+    '',
+    bar,
+    ...bodyLines.map((line) => `  ${line}`),
+    ...formatKeyValueRows(rows),
+    bar,
+  ].join('\n') + '\n'
+}
+
+function writeQuickstartRunSummary({ sources = [], bridgeSetup = null, bridgeUrl = '', configPath = defaultConfigPath(), registered = null, smokeMode = '', smoked = null, mode = 'direct', summaryPath = defaultRunSummaryPath(configPath) } = {}) {
+  try {
+    mkdirSync(dirname(summaryPath), { recursive: true })
+    writeFileSync(summaryPath, formatQuickstartRunSummary({
+      sources,
+      bridgeSetup,
+      bridgeUrl,
+      configPath,
+      registered,
+      smokeMode,
+      smoked,
+      mode,
+    }), 'utf8')
+    return { path: summaryPath }
+  } catch (error) {
+    return { path: '', error: error.message }
+  }
+}
+
+function formatQuickstartRunSummary({ sources = [], bridgeSetup = null, bridgeUrl = '', configPath = defaultConfigPath(), registered = null, smokeMode = '', smoked = null, mode = 'direct' } = {}) {
+  const lines = [
+    '# llmwiki-bridge-start run details',
+    '',
+    `Mode: ${mode}`,
+    `Generated: ${new Date().toISOString()}`,
+    `Source config: ${configPath}`,
+  ]
+  if (bridgeUrl) {
+    lines.push(`Bridge URL: ${bridgeUrl}`)
+  }
+  if (smokeMode) {
+    lines.push(`Smoke mode: ${smokeMode}`)
+  }
+  if (smoked?.status) {
+    lines.push(`Smoke status: ${smoked.status.state || smoked.status.message?.kind || 'ok'}`)
+  }
+  const registeredSources = registeredBridgeSources(registered)
+  if (registeredSources) {
+    lines.push(`Registered bridge sources: ${registeredSources.length}`)
+  }
+  if (mode === 'deferred-bridge' && bridgeUrl) {
+    lines.push(
+      '',
+      '## Bridge setup next steps',
+      '',
+      '1. Start llmwiki-agent-bridge with one of the manual examples shown in the quickstart transcript.',
+      '2. After it is reachable, register the started source config and smoke test:',
+      `   llmwiki-bridge-start register --bridge ${bridgeUrl} --config ${configPath}`,
+      `   llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode evidence-only`,
+    )
+  }
+  lines.push('', '## Sources')
+  if (sources.length) {
+    for (const source of sources) {
+      lines.push(
+        '',
+        `### ${sourceDisplayName(source)}`,
+        `- URL: ${source.url || 'n/a'}`,
+        `- MCP Streamable HTTP: ${source.url ? sourceMcpStreamUrl(source.url) : 'n/a'}`,
+        `- Path: ${source.path || 'n/a'}`,
+        `- Process: ${formatProcessDetail(source)}`,
+      )
+    }
+  } else {
+    lines.push('', 'No source processes were started.')
+  }
+  if (bridgeSetup) {
+    lines.push('', '## Bridge')
+    lines.push(`- URL: ${bridgeSetup.bridgeUrl || bridgeUrl || 'n/a'}`)
+    lines.push(`- Process: ${bridgeSetup.executed ? formatProcessDetail(bridgeSetup) : 'already running or manually started; PID/log path not captured by quickstart'}`)
+    if (bridgeSetup.runtimeConfiguration) {
+      lines.push(`- Runtime configuration: ${bridgeSetup.runtimeConfiguration.ok ? 'applied' : 'not applied'}`)
+    }
+  }
+  lines.push(
+    '',
+    '## Stop guidance',
+    '',
+    'Stop only the exact PID(s) listed above with your OS process manager, or stop the terminal/process you started manually.',
+    'Do not kill unrelated node/python processes by name.',
+    '',
+  )
+  return lines.join('\n')
+}
+
+function defaultRunSummaryPath(configPath = defaultConfigPath()) {
+  return join(dirname(resolve(configPath)), 'quickstart-handoff.md')
+}
+
+function formatCompactProcessDetailRows({ sources = [], bridgeSetup = null } = {}) {
+  const rows = []
+  for (const source of sources) {
+    rows.push(`- Source ${sourceDisplayName(source)}: ${formatProcessDetail(source)}`)
+  }
+  if (bridgeSetup) {
+    const bridgeDetail = bridgeSetup.executed
+      ? formatProcessDetail(bridgeSetup)
+      : 'already running or manually started; PID/log path not captured by quickstart'
+    rows.push(`- Bridge ${bridgeSetup.bridgeUrl || ''}: ${bridgeDetail}`.trimEnd())
+  }
+  return rows.length ? rows : ['- PID/log path details were not captured.']
 }
 
 function formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources = [] } = {}) {
@@ -1612,6 +1768,18 @@ function formatProcessLogs(logs = {}) {
   return paths.join(', ')
 }
 
+function formatDisplayPath(path) {
+  const resolved = resolve(path)
+  const rel = relative(process.cwd(), resolved)
+  if (!rel) {
+    return '.'
+  }
+  if (!rel.startsWith('..') && !isAbsolute(rel)) {
+    return rel
+  }
+  return resolved
+}
+
 function sourceMcpStreamUrl(sourceUrl) {
   if (!sourceUrl) {
     return ''
@@ -1630,19 +1798,12 @@ function sourceEndpointUrl(sourceUrl, endpointPath) {
 
 function formatBridgeHandoff(bridgeUrl) {
   const baseUrl = trimTrailingSlash(bridgeUrl)
-  return [
-    'Bridge handoff:',
-    '',
-    '  Bridge',
-    `    Bridge base URL: ${baseUrl}`,
-    '',
-    '  Endpoints',
-    `    A2A-style answer endpoint: POST ${sourceEndpointUrl(baseUrl, '/message:send')}`,
-    `    MCP-style JSON-RPC endpoint: POST ${sourceEndpointUrl(baseUrl, '/mcp')}`,
-    '',
-    '  Settings',
-    `    Settings UI: ${sourceEndpointUrl(baseUrl, '/settings')}`,
-    '',
+  return formatSummaryCard('Bridge handoff', [
+    ['MCP JSON-RPC', `POST ${sourceEndpointUrl(baseUrl, '/mcp')}`],
+    ['A2A answer', `POST ${sourceEndpointUrl(baseUrl, '/message:send')}`],
+    ['Settings', sourceEndpointUrl(baseUrl, '/settings')],
+    ['Base URL', baseUrl],
+  ], { bodyLines: ['Ready bridge endpoints'] }) + [
     'Use the endpoint your agent or script supports; exact client configuration syntax varies by client.',
   ].join('\n') + '\n'
 }

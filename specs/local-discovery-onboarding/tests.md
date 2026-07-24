@@ -74,9 +74,10 @@
   (`/mcp/stream`) for every started source without asserting client-specific
   configuration syntax or printing extra source/health/manifest/MCP JSON-RPC
   URL labels.
-- Quickstart direct-source handoff includes lifecycle copy stating that started
-  local source processes remain running and prints PIDs/log paths when
-  available.
+- Quickstart direct-source handoff keeps stdout concise: it prints endpoint
+  URLs and a compact operational details section with a saved
+  `.llmwiki-bridge-start/quickstart-handoff.md` reference, while PID/log rows
+  are written to that saved summary rather than printed inline.
 - Quickstart success copy treats a healthy printed local source URL as the
   minimum onboarding success and describes bridge setup as optional.
 - Quickstart default source selection hides advanced/lower-priority
@@ -173,9 +174,10 @@
   requested port, source title/id, and assigned port.
 - Quickstart bridge success handoff: after registration and smoke, the
   transcript lists bridge base URL, `POST /message:send`, `POST /mcp`, and
-  `/settings` as a readable grouped block without describing the bridge as MCP
-  Streamable HTTP or using `/mcp/stream`, then includes lifecycle copy for
-  started local source/bridge processes with PIDs/log paths when available.
+  `/settings` as a concise grouped block without describing the bridge as MCP
+  Streamable HTTP or using `/mcp/stream`, then prints compact operational
+  details with a saved summary reference. Started source/bridge PID and log
+  rows live in `.llmwiki-bridge-start/quickstart-handoff.md`, not inline.
 - Bridge start uses the `cross-spawn` adapter directly for package commands,
   including Windows `.cmd` command names, without a hand-written `cmd.exe`
   wrapper.
