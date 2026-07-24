@@ -252,7 +252,9 @@ test('quickstart TTY screen transitions clear each major screen while preserving
   )
 
   const visibleClear = `${ansiCursor.up(23)}${ansiCursor.to(0)}${ansiErase.down()}`
+  const pageLogo = 'llmwiki-bridge-start\nlocal knowledge -> agent bridge\n'
   assert.equal(countOccurrences(stdout.text, visibleClear), 3)
+  assert.equal(countOccurrences(stdout.text, `${visibleClear}${pageLogo}`), 3)
   assert.doesNotMatch(stdout.text, /\u001b\[3J/)
   assert.deepEqual(calls.map((call) => call[0]), ['confirm', 'discover', 'multiselect', 'confirm', 'validate', 'start', 'confirm'])
   assert.deepEqual(result.skipped, ['bridge-setup', 'register', 'smoke'])
@@ -283,6 +285,7 @@ test('quickstart screen transitions stay disabled for redirected stdout even whe
   )
 
   assert.doesNotMatch(stdout.text, /\u001b\[[0-9;]*J/)
+  assert.equal(countOccurrences(stdout.text, 'local knowledge -> agent bridge'), 1)
   assert.match(stdout.text, /\[\?\] Auto-discover local LLMWiki\/knowledge source folders\?\nDefault discovery scans the current user's home unless --path\/--workspace\/--cwd constrains it\.\n\[Y\/n\]:\n/)
   assert.match(stdout.text, /\[choice\] Selected: No\n/)
 })

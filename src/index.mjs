@@ -104,6 +104,8 @@ const QUICKSTART_CLEAR_SCREEN_OPT_OUT_ENV = [
   'LLMWIKI_BRIDGE_START_NO_CLEAR',
   'LLMWIKI_QUICKSTART_NO_CLEAR_SCREEN',
 ]
+const QUICKSTART_LOGO_TITLE = 'llmwiki-bridge-start'
+const QUICKSTART_LOGO_SUBTITLE = 'local knowledge -> agent bridge'
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
 const GENERIC_MARKDOWN_SCORE_CAP = 25
@@ -1359,10 +1361,12 @@ function optionDisablesScreenClear(value) {
 }
 
 function formatQuickstartBanner(ui) {
-  const title = 'llmwiki-bridge-start quickstart'
-  const padded = ` ${title} `
-  const border = `+${'-'.repeat(padded.length)}+`
-  return `${paint(ui, 'boldCyan', `${border}\n|${padded}|\n${border}`)}\n`
+  const title = `${QUICKSTART_LOGO_TITLE} quickstart`
+  const width = Math.max(title.length, QUICKSTART_LOGO_SUBTITLE.length) + 2
+  const border = `+${'-'.repeat(width)}+`
+  const titleLine = `| ${title.padEnd(width - 2)} |`
+  const subtitleLine = `| ${QUICKSTART_LOGO_SUBTITLE.padEnd(width - 2)} |`
+  return `${paint(ui, 'boldCyan', `${border}\n${titleLine}\n${subtitleLine}\n${border}`)}\n`
 }
 
 function writeQuickstartIntro(output, ui) {
@@ -1374,6 +1378,7 @@ function writeQuickstartIntro(output, ui) {
 function writeQuickstartStep(output, ui, index, total, title) {
   if (index > 1) {
     writeQuickstartScreenBreak(output, ui)
+    writeQuickstartPageLogo(output, ui)
   }
   output.write(`\n${paint(ui, 'boldCyan', `[${index}/${total}] ${title}`)}\n`)
   output.write(`${paint(ui, 'dim', '─'.repeat(50))}\n`)
@@ -1384,8 +1389,20 @@ function writeQuickstartSubscreen(output, ui, title) {
     return
   }
   writeQuickstartScreenBreak(output, ui)
+  writeQuickstartPageLogo(output, ui)
   output.write(`\n${paint(ui, 'boldCyan', title)}\n`)
   output.write(`${paint(ui, 'dim', '─'.repeat(50))}\n`)
+}
+
+function writeQuickstartPageLogo(output, ui) {
+  if (!ui.screenTransitions) {
+    return
+  }
+  output.write(formatQuickstartPageLogo(ui))
+}
+
+function formatQuickstartPageLogo(ui) {
+  return `${paint(ui, 'boldCyan', QUICKSTART_LOGO_TITLE)}\n${paint(ui, 'dim', QUICKSTART_LOGO_SUBTITLE)}\n`
 }
 
 function writeQuickstartScreenBreak(output, ui) {

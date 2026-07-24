@@ -169,6 +169,10 @@ onboarding harness.
   screens with a raw numeric readline prompt. Non-interactive and scripted
   runs still accept numeric/text aliases such as `2`, `hermes`, and blank
   default.
+- Follow-up on 2026-07-24: interactive quickstart screens now redraw a compact
+  `llmwiki-bridge-start` wordmark after each visible-screen transition, so each
+  focused question/screen has clear product identity. Non-TTY and redirected
+  transcripts keep only the initial banner.
 
 ## Validation
 
@@ -312,6 +316,14 @@ onboarding harness.
   - Targeted runtime/screen transition tests passed.
   - `npm run check` passed with syntax checks, 94 Node tests, and package
     dry-run.
+- Follow-up quickstart wordmark:
+  - First-run banner now includes the `local knowledge -> agent bridge`
+    subtitle.
+  - TTY screen transition tests assert the compact wordmark is redrawn after
+    each visible-screen clear, while redirected transcripts do not repeat it.
+  - Targeted screen-transition tests passed.
+  - `npm run check` passed with syntax checks, 94 Node tests, and package
+    dry-run.
 
 ## Commits
 
@@ -336,7 +348,8 @@ onboarding harness.
 - `7b7074b` — Harden quickstart runtime detection
 - `4f1b723` — Compact quickstart final handoff
 - `f99e47a` — Add TTY quickstart screen transitions
-- current — Use select UI for runtime quickstart
+- `1d02315` — Use select UI for runtime quickstart
+- current — Add quickstart screen wordmark
 
 ## Follow-ups
 

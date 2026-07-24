@@ -172,9 +172,11 @@ source server.
   when stdin and stdout are both TTYs and CI is not detected, must not clear
   terminal scrollback, and must be disabled by `--no-clear-screen` or
   `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1`. Redirected, piped, injected prompt,
-  and non-TTY transcripts must remain stable. After the source-selection screen
-  is cleared, the validation/start screen must reprint the selected source
-  label(s) and full local path(s).
+  and non-TTY transcripts must remain stable. Each focused interactive screen
+  after a visible-screen transition should redraw a compact
+  `llmwiki-bridge-start` wordmark above the active question/step. After the
+  source-selection screen is cleared, the validation/start screen must reprint
+  the selected source label(s) and full local path(s).
 - After source startup approval, `quickstart` must show visible validation
   progress while `llmwiki-serve manifest` compatibility checks are actually
   running. TTY output should use the same spinner/progress style as discovery;
