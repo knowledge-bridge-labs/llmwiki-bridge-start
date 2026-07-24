@@ -67,6 +67,8 @@
   compact endpoint/operational sections.
 - [x] Add TTY-only visible-screen quickstart transitions with selected-source
   context preserved on validation/start and stable non-TTY transcripts.
+- [x] Move interactive runtime setup from raw numeric text input to a guided
+  single-select prompt while preserving non-interactive numeric/text aliases.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

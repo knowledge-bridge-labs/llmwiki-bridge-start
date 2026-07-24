@@ -164,6 +164,11 @@ onboarding harness.
   `--no-clear-screen` and `LLMWIKI_BRIDGE_START_NO_CLEAR_SCREEN=1` opt out, and
   the validation/start screen reprints the selected source label and full path
   after the source-selection screen is cleared.
+- Follow-up on 2026-07-24: interactive runtime setup now uses the existing
+  `@clack/prompts` single-select UI instead of mixing Clack source-selection
+  screens with a raw numeric readline prompt. Non-interactive and scripted
+  runs still accept numeric/text aliases such as `2`, `hermes`, and blank
+  default.
 
 ## Validation
 
@@ -296,6 +301,17 @@ onboarding harness.
   - `npm test` passed with 92 Node tests.
   - `npm run check` passed with syntax checks, 92 Node tests, and package
     dry-run.
+- Follow-up runtime setup select UI:
+  - TTY/interactively forced runtime setup now calls the Clack single-select
+    prompt and no longer prints the raw `Runtime setup options:` text block in
+    that path.
+  - Non-TTY/scripted runtime setup keeps the numeric/text fallback for
+    automation compatibility.
+  - Explicit `--runtime-setup skip|hermes|deepagents` bypasses the interactive
+    runtime menu and uses the requested runtime choice directly.
+  - Targeted runtime/screen transition tests passed.
+  - `npm run check` passed with syntax checks, 94 Node tests, and package
+    dry-run.
 
 ## Commits
 
@@ -319,7 +335,8 @@ onboarding harness.
 - `6a572e5` — Add active quickstart progress spinners
 - `7b7074b` — Harden quickstart runtime detection
 - `4f1b723` — Compact quickstart final handoff
-- current — Add TTY quickstart screen transitions
+- `f99e47a` — Add TTY quickstart screen transitions
+- current — Use select UI for runtime quickstart
 
 ## Follow-ups
 

@@ -257,6 +257,10 @@ source server.
   confirm the exact command/package; otherwise quickstart must not run an
   installer and must instead print safe guidance, then prompt for the endpoint
   after the runtime is running.
+- In interactive terminals, runtime setup must use the same guided prompt style
+  as the rest of QuickStart rather than a raw numeric text prompt. Numeric/text
+  runtime setup aliases remain supported for non-interactive, piped, injected
+  prompt, `--yes`, and explicit flag flows.
 - If the user selects Hermes or DeepAgents but skips installation or endpoint
   input, quickstart must continue with an evidence-only bridge path and print a
   clear next action for rerunning with `--llm-endpoint`, `--llm-model`, and

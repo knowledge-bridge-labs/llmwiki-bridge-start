@@ -69,12 +69,14 @@ PowerShell and POSIX manual-start examples such as
 custom `--bridge http://host:port` values are reflected in those env
 assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
-runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents.
-Hermes and DeepAgents are the supported QuickStart runtime profiles. When a
-repo-confirmed runtime install command is not available, quickstart does not
-auto-install them. Instead it prints safe install/start guidance and asks for
-the endpoint only after the runtime is running. Runtime setup checks installed
-frameworks through their supported CLI entrypoints (`hermes --version`,
+runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents. In
+interactive terminals this is a single-select menu; piped/non-interactive runs
+keep numeric text input for scripting compatibility. Hermes and DeepAgents are
+the supported QuickStart runtime profiles. When a repo-confirmed runtime install
+command is not available, quickstart does not auto-install them. Instead it
+prints safe install/start guidance and asks for the endpoint only after the
+runtime is running. Runtime setup checks installed frameworks through their
+supported CLI entrypoints (`hermes --version`,
 `dcode --version`) and uses Hermes API server health (`/health` or
 `/v1/health`) when deciding whether a Hermes endpoint can be offered as the
 Enter default. DeepAgents Code is checked through `dcode`, but quickstart does

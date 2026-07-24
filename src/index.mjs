@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, spinner as clackSpinner } from '@clack/prompts'
+import { cancel as clackCancel, confirm as clackConfirm, isCancel as isClackCancel, multiselect as clackMultiselect, select as clackSelect, spinner as clackSpinner } from '@clack/prompts'
 import crossSpawn from 'cross-spawn'
 import { cursor, erase } from 'sisteransi'
 
@@ -695,12 +695,18 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
     }
   }
 
-  writeQuickstartSubscreen(output, ui, 'Bridge runtime setup')
-  writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
-  output.write(formatRuntimeSetupChoices())
-
   const fallbackChoice = requestedChoice || runtimeSetupDefaultChoice(options)
-  const choice = await promptRuntimeSetupChoice(prompter, output, fallbackChoice)
+  let choice = requestedChoice
+  writeQuickstartSubscreen(output, ui, 'Bridge runtime setup')
+  if (choice) {
+    writeStatus(output, ui, 'info', `Using runtime setup from explicit --runtime-setup: ${choice.label}.`)
+  } else {
+    writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
+    if (!prompter.usesInteractiveRuntimeSetup) {
+      output.write(formatRuntimeSetupChoices())
+    }
+    choice = await promptRuntimeSetupChoice(prompter, output, fallbackChoice)
+  }
   writeStatus(output, ui, 'choice', `Runtime setup: ${choice.label}`)
 
   if (choice.id === RUNTIME_SETUP_SKIP) {
@@ -736,20 +742,30 @@ function formatRuntimeSetupChoices() {
   return [
     'Runtime setup options:',
     '  1) skip/evidence-only — do not configure a model runtime now',
-    '  2) Hermes — use/install Hermes, then enter its endpoint',
+    '  2) Hermes — check Hermes install; enter its endpoint',
     '  3) DeepAgents — check dcode install; bridge runtime endpoint must be entered explicitly',
   ].join('\n') + '\n'
 }
 
 async function promptRuntimeSetupChoice(prompter, output, fallbackChoice, { maxAttempts = 5 } = {}) {
+  if (typeof prompter.selectRuntimeSetupChoice === 'function') {
+    return prompter.selectRuntimeSetupChoice(RUNTIME_SETUP_CHOICES, fallbackChoice)
+  }
+  return promptRuntimeSetupChoiceWithText(prompter.ask.bind(prompter), output, fallbackChoice, {
+    maxAttempts,
+    reprompt: Boolean(prompter.repromptYesNo),
+  })
+}
+
+async function promptRuntimeSetupChoiceWithText(ask, output, fallbackChoice, { maxAttempts = 5, reprompt = false } = {}) {
   let attempts = 0
   while (true) {
-    const answer = await prompter.ask(`[?] Choose runtime setup before bridge start (${RUNTIME_SETUP_CHOICES.map((choice) => `${choice.rank}=${choice.label}`).join(', ')}; default ${fallbackChoice.rank})`, fallbackChoice.rank)
+    const answer = await ask(`[?] Choose runtime setup before bridge start (${RUNTIME_SETUP_CHOICES.map((choice) => `${choice.rank}=${choice.label}`).join(', ')}; default ${fallbackChoice.rank})`, fallbackChoice.rank)
     try {
       return parseRuntimeSetupChoice(answer, fallbackChoice)
     } catch (error) {
       attempts += 1
-      if (!prompter.repromptYesNo || attempts >= maxAttempts) {
+      if (!reprompt || attempts >= maxAttempts) {
         throw error
       }
       output?.write(`[fail] ${error.message}. Enter 1, 2, 3, skip, hermes, or deepagents.\n`)
@@ -2198,9 +2214,11 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   const promptOnOneLine = Boolean(input.isTTY && output.isTTY)
   const usesInteractiveYesNo = shouldUseInteractiveYesNo(io, { yes })
   const usesInteractiveCandidateSelection = shouldUseInteractiveCandidateSelection(io, { yes })
+  const usesInteractiveRuntimeSetup = shouldUseInteractiveRuntimeSetup(io, { yes })
   const clackPrompts = {
     confirm: io.clackPrompts?.confirm || clackConfirm,
     multiselect: io.clackPrompts?.multiselect || clackMultiselect,
+    select: io.clackPrompts?.select || clackSelect,
     spinner: io.clackPrompts?.spinner || clackSpinner,
     isCancel: io.clackPrompts?.isCancel || isClackCancel,
     cancel: io.clackPrompts?.cancel || clackCancel,
@@ -2209,6 +2227,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   if (yes) {
     return {
       usesInteractiveCandidateSelection: false,
+      usesInteractiveRuntimeSetup: false,
       output,
       repromptYesNo: false,
       async ask(question, fallback = '') {
@@ -2219,6 +2238,9 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
       async selectCandidates(candidates) {
         return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: false })
       },
+      async selectRuntimeSetupChoice(choices, fallbackChoice) {
+        return fallbackChoice || choices[0]
+      },
       close() {},
     }
   }
@@ -2226,6 +2248,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   if (typeof io.prompt === 'function') {
     return {
       usesInteractiveCandidateSelection,
+      usesInteractiveRuntimeSetup,
       output,
       repromptYesNo: true,
       async ask(question, fallback = '') {
@@ -2237,6 +2260,12 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
           return selectCandidatesWithClack(candidates, { clackPrompts, input, output })
         }
         return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: true })
+      },
+      async selectRuntimeSetupChoice(choices, fallbackChoice) {
+        if (usesInteractiveRuntimeSetup) {
+          return selectRuntimeSetupWithClack(choices, fallbackChoice, { clackPrompts, input, output })
+        }
+        return promptRuntimeSetupChoiceWithText(this.ask.bind(this), output, fallbackChoice, { reprompt: true })
       },
       close() {},
     }
@@ -2293,6 +2322,7 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
   return {
     usesInteractiveYesNo,
     usesInteractiveCandidateSelection,
+    usesInteractiveRuntimeSetup,
     output,
     repromptYesNo: Boolean(!usesInteractiveYesNo && input.isTTY && output.isTTY),
     async ask(question, fallback = '') {
@@ -2314,6 +2344,13 @@ function createQuickstartPrompter(io, { yes = false } = {}) {
       }
       return selectCandidatesWithText(this.ask.bind(this), candidates, { output, reprompt: Boolean(input.isTTY && output.isTTY) })
     },
+    async selectRuntimeSetupChoice(choices, fallbackChoice) {
+      if (usesInteractiveRuntimeSetup) {
+        closeReadlineBeforeClack()
+        return selectRuntimeSetupWithClack(choices, fallbackChoice, { clackPrompts, input, output })
+      }
+      return promptRuntimeSetupChoiceWithText(this.ask.bind(this), output, fallbackChoice, { reprompt: Boolean(input.isTTY && output.isTTY) })
+    },
     close() {
       readline?.close()
     },
@@ -2330,6 +2367,12 @@ function shouldUseInteractiveCandidateSelection(io = {}, { yes = false } = {}) {
   const input = io.stdin || process.stdin
   const output = io.stdout || process.stdout
   return Boolean(!yes && (io.forceInteractiveCandidateSelection || (typeof io.prompt !== 'function' && input.isTTY && output.isTTY)))
+}
+
+function shouldUseInteractiveRuntimeSetup(io = {}, { yes = false } = {}) {
+  const input = io.stdin || process.stdin
+  const output = io.stdout || process.stdout
+  return Boolean(!yes && (io.forceInteractiveRuntimeSetup || (typeof io.prompt !== 'function' && input.isTTY && output.isTTY)))
 }
 
 async function confirmYesNoWithClack(question, fallback, { clackPrompts, input, output }) {
@@ -2416,6 +2459,49 @@ async function selectCandidatesWithClack(candidates, { clackPrompts, input, outp
     return []
   }
   return parseCandidateSelection(answer.join(','), candidates, { fallback: 'none' })
+}
+
+async function selectRuntimeSetupWithClack(choices, fallbackChoice, { clackPrompts, input, output }) {
+  const answer = await clackPrompts.select({
+    message: 'Choose runtime setup before bridge start',
+    options: formatRuntimeSetupSelectOptions(choices),
+    initialValue: fallbackChoice?.id || RUNTIME_SETUP_SKIP,
+    input,
+    output,
+  })
+  if (clackPrompts.isCancel(answer)) {
+    clackPrompts.cancel('Runtime setup skipped; continuing evidence-only.', { output })
+    return runtimeSetupChoiceById(RUNTIME_SETUP_SKIP)
+  }
+  return parseRuntimeSetupChoice(answer, fallbackChoice)
+}
+
+function formatRuntimeSetupSelectOptions(choices) {
+  return choices.map((choice) => ({
+    value: choice.id,
+    label: formatRuntimeSetupSelectLabel(choice),
+    hint: formatRuntimeSetupSelectHint(choice),
+  }))
+}
+
+function formatRuntimeSetupSelectLabel(choice) {
+  if (choice.id === RUNTIME_SETUP_SKIP) {
+    return 'Skip / evidence-only'
+  }
+  return choice.label
+}
+
+function formatRuntimeSetupSelectHint(choice) {
+  if (choice.id === RUNTIME_SETUP_SKIP) {
+    return 'No model runtime now; direct source evidence remains usable'
+  }
+  if (choice.id === RUNTIME_SETUP_HERMES) {
+    return 'Check Hermes install, then enter its bridge runtime endpoint'
+  }
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    return 'Check dcode install; enter a runtime endpoint explicitly'
+  }
+  return ''
 }
 
 function formatCandidateMultiselectOptions(candidates) {

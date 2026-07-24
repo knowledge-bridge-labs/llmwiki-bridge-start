@@ -135,6 +135,9 @@
   bridge start. The choice list includes skip/evidence-only, Hermes, and
   DeepAgents, and does not include a generic/existing OpenAI-compatible
   endpoint option.
+- Interactive QuickStart runtime setup uses a single-select prompt instead of
+  the numeric text prompt. Non-interactive/scripted runtime setup still accepts
+  numeric and text aliases such as `2`, `hermes`, and blank default.
 - Explicit preconfigured endpoint flags can still feed runtime values to
   bridge start env and delegated-runtime smoke as a compatibility path without
   appearing in the interactive first-run menu.

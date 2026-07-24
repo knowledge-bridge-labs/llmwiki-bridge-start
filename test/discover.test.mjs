@@ -1642,6 +1642,174 @@ test('quickstart TTY multiselect receives only recommended candidates by default
   assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
 })
 
+test('quickstart uses clack select for interactive runtime setup', async () => {
+  const calls = []
+  const prompts = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', 'skip', 'n']
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      forceInteractiveRuntimeSetup: true,
+      async prompt(question) {
+        prompts.push(question)
+        return answers.shift()
+      },
+      clackPrompts: {
+        async select(params) {
+          calls.push(['runtime-select', params])
+          return 'hermes'
+        },
+        isCancel() {
+          return false
+        },
+        cancel(message) {
+          calls.push(['cancel', message])
+        },
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: false,
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'not found' }],
+          runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+          endpointDefault: { value: '', source: '' },
+        }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start is declined')
+      },
+    },
+  )
+
+  const runtimeSelectCall = calls.find((call) => call[0] === 'runtime-select')
+  assert(runtimeSelectCall)
+  assert.equal(runtimeSelectCall[1].message, 'Choose runtime setup before bridge start')
+  assert.equal(runtimeSelectCall[1].initialValue, 'skip')
+  assert.deepEqual(runtimeSelectCall[1].options.map((option) => option.value), ['skip', 'hermes', 'deepagents'])
+  assert.deepEqual(runtimeSelectCall[1].options.map((option) => option.label), ['Skip / evidence-only', 'Hermes', 'DeepAgents'])
+  assert.match(runtimeSelectCall[1].options[1].hint, /Check Hermes install/)
+  assert(!stdout.text.includes('Runtime setup options:'))
+  assert(!prompts.some((prompt) => /Choose runtime setup before bridge start/.test(prompt)))
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.equal(result.runtimeSetup.fallback, 'evidence-only')
+  assert.match(stdout.text, /\[choice\] Runtime setup: Hermes/)
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'runtime-select', 'framework', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('quickstart explicit runtime setup skips the interactive runtime menu', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', 'n']
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'runtime-setup': 'skip' },
+    {
+      stdout,
+      stderr: stdout,
+      forceInteractiveRuntimeSetup: true,
+      async prompt() {
+        return answers.shift()
+      },
+      clackPrompts: {
+        async select() {
+          throw new Error('runtime select should not run when --runtime-setup is explicit')
+        },
+        isCancel() {
+          return false
+        },
+        cancel(message) {
+          calls.push(['cancel', message])
+        },
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start is declined')
+      },
+    },
+  )
+
+  assert.equal(result.runtimeSetup.choice, 'skip')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.equal(result.runtimeSetup.runtime.disabled, true)
+  assert.match(stdout.text, /Using runtime setup from explicit --runtime-setup: skip\/evidence-only/)
+  assert(!stdout.text.includes('Runtime setup options:'))
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
 test('quickstart generates bridge setup command without executing it and runs delegated smoke when configured', async () => {
   const calls = []
   const stdout = captureWritable()
