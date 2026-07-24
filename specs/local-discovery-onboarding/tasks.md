@@ -72,6 +72,14 @@
   logs.
 - [x] Move interactive runtime setup from raw numeric text input to a guided
   single-select prompt while preserving non-interactive numeric/text aliases.
+- [x] Add official-doc-backed Hermes/DeepAgents runtime installer plans with
+  explicit approval, `--yes` safety, `--install-runtime`/`--no-install-runtime`
+  flags, OS-specific allowlisting, fixed argv execution, installer logs, HTTPS
+  final-URL enforcement, and minimal installer environment allowlisting.
+- [x] Add runtime installer tests for OS allowlist, approved Hermes install
+  recheck, `--yes` no-install default, fixed argv script execution, log writes,
+  redirect safety, provider-secret env exclusion, and installer failure
+  fallback.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

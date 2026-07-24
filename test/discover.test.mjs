@@ -7,7 +7,7 @@ import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 import { cursor as ansiCursor, erase as ansiErase } from 'sisteransi'
 
-import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
+import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, downloadRuntimeInstallerScript, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, runRuntimeInstallPlan, runtimeInstallPlan, scanCandidateDirectories, scoreCandidate, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -20,6 +20,16 @@ test('parseArgs supports quickstart screen-clear opt-out flag', () => {
   const parsed = parseArgs(['quickstart', '--no-clear-screen'])
   assert.equal(parsed.command, 'quickstart')
   assert.equal(parsed.options['clear-screen'], false)
+})
+
+test('parseArgs supports runtime install approval flags', () => {
+  const approve = parseArgs(['quickstart', '--install-runtime'])
+  assert.equal(approve.command, 'quickstart')
+  assert.equal(approve.options['install-runtime'], true)
+
+  const decline = parseArgs(['quickstart', '--no-install-runtime'])
+  assert.equal(decline.command, 'quickstart')
+  assert.equal(decline.options['install-runtime'], false)
 })
 
 test('runCli starts quickstart when no subcommand is provided', async () => {
@@ -819,7 +829,9 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert.match(io.stdout.text, /\[choice\] Selected: Yes/)
   assert.match(io.stdout.text, /\[choice\] Selected: defaulted No/)
   assert.match(io.stdout.text, /Selected source folder\(s\):\n  - second-wiki \[Obsidian vault\]\n    second-wiki/)
-  assert.match(io.stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
+  assert.match(io.stdout.text, /Simple path: llmwiki-serve alone is enough when your coding agent can register the direct source MCP URL\(s\)/)
+  assert.match(io.stdout.text, /Add llmwiki-agent-bridge only when you want one A2A\/MCP-style bridge endpoint/)
+  assert.match(io.stdout.text, /Runtime path: connect an already running Hermes\/DeepAgents endpoint/)
   assert.match(io.stdout.text, /If you skip bridge setup, the direct MCP Streamable HTTP URL\(s\) printed below are ready to use\./)
   assert.match(io.stdout.text, /Coding-agent MCP registration URLs:/)
   assert.match(io.stdout.text, /These are MCP-over-HTTP\/Streamable HTTP server URLs; exact client configuration syntax varies by client\./)
@@ -1651,7 +1663,7 @@ test('quickstart uses clack select for interactive runtime setup', async () => {
   const calls = []
   const prompts = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', 'skip', 'n']
+  const answers = ['y', '1', 'y', 'y', 'n', 'skip', 'n']
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
@@ -1911,7 +1923,9 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.runtimeSetup.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(result.runtimeSetup.model, 'local-model')
   assert.equal(result.runtimeSetup.profile, 'generic')
-  assert.match(stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
+  assert.match(stdout.text, /Simple path: llmwiki-serve alone is enough when your coding agent can register the direct source MCP URL\(s\)/)
+  assert.match(stdout.text, /Add llmwiki-agent-bridge only when you want one A2A\/MCP-style bridge endpoint/)
+  assert.match(stdout.text, /Runtime path: connect an already running Hermes\/DeepAgents endpoint/)
   assert.match(stdout.text, /No llmwiki-agent-bridge is reachable at http:\/\/127\.0\.0\.1:9911 yet/)
   assert.match(stdout.text, /Safe manual start examples/)
   assert.match(stdout.text, /no global install/)
@@ -2367,7 +2381,7 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
   assert.equal(calls.find((call) => call[0] === 'configure-runtime')[1].runtime.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
   assert.match(stdout.text, /Registered 1 total bridge source\(s\); 1 selected for this quickstart/)
-  assert.match(stdout.text, /No repo-confirmed auto-install command for Hermes was found/)
+  assert.match(stdout.text, /Hermes CLI is installed\. QuickStart will not run an installer\./)
   assert.match(stdout.text, /Hermes install: `hermes --version` detected/)
   assert.match(stdout.text, /Hermes supported checks: status ok; doctor ok/)
   assert.doesNotMatch(stdout.text, /hermes config show --json/)
@@ -2382,7 +2396,7 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
   assert(!stdout.text.includes('pc-custom-hermes-model'))
 })
 
-test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-install', async () => {
+test('quickstart guides DeepAgents runtime setup without endpoint inference when install is unavailable', async () => {
   const calls = []
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', '3', 'skip', 'n', 'n']
@@ -2459,6 +2473,23 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
           },
         }
       },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'deepagents',
+          autoInstallAvailable: false,
+          command: null,
+          args: [],
+          reason: 'test fixture has no installer',
+          docs: {
+            install: 'https://docs.langchain.com/oss/python/deepagents/code/quickstart',
+            providers: 'https://docs.langchain.com/oss/python/deepagents/code/providers',
+          },
+        }
+      },
+      async installRuntime() {
+        throw new Error('runtime installer should not run when install plan is unavailable')
+      },
       async startBridgeCommand(plan, args) {
         calls.push(['bridge-start', plan, args])
         throw new Error('bridge command should not run when background start is declined')
@@ -2474,7 +2505,7 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'framework', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'bridge-health', 'bridge-plan'])
   assert.equal(result.runtimeSetup.choice, 'deepagents')
   assert.equal(result.runtimeSetup.configured, false)
   assert.equal(result.runtimeSetup.fallback, 'evidence-only')
@@ -2485,13 +2516,615 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
   assert.match(stdout.text, /DeepAgents/)
   assert.doesNotMatch(stdout.text, /existing LLM endpoint/)
   assert.doesNotMatch(stdout.text, /\n  4\)/)
-  assert.match(stdout.text, /No repo-confirmed auto-install command for DeepAgents Code was found/)
+  assert.match(stdout.text, /QuickStart cannot auto-install DeepAgents Code on this OS\. test fixture has no installer/)
   assert.match(stdout.text, /DeepAgents Code install: `dcode --version` was not detected on PATH/)
   assert.match(stdout.text, /DeepAgents Code runtime: no supported OpenAI-compatible local endpoint discovery method is recorded/)
   assert.match(stdout.text, /--runtime-profile deepagents/)
   assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
   assert.doesNotMatch(stdout.text, /Start DeepAgents so it exposes an OpenAI-compatible endpoint/)
   assert(prompts.some((prompt) => /Optional bridge runtime base URL \(OpenAI-compatible; DeepAgents is checked via dcode, but no DeepAgents endpoint is inferred; press Enter or type skip to continue evidence-only\)/.test(prompt)))
+})
+
+test('quickstart installs a missing Hermes CLI only after explicit approval and rechecks before endpoint setup', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', '2', 'y', '', '', 'n', 'n']
+  const inspectResults = [
+    {
+      framework: 'hermes',
+      supported: true,
+      command: 'hermes',
+      installed: false,
+      installCheck: { displayCommand: 'hermes --version' },
+      checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'CLI not detected' }],
+      runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+      endpointDefault: { value: '', source: '' },
+    },
+    {
+      framework: 'hermes',
+      supported: true,
+      command: 'hermes',
+      installed: true,
+      version: '1.2.3',
+      installCheck: { displayCommand: 'hermes --version' },
+      checks: [{ name: 'version', displayCommand: 'hermes --version', ok: true }],
+      runtime: { ok: true, baseUrl: 'http://127.0.0.1:8642/v1', url: 'http://127.0.0.1:8642/health' },
+      endpointDefault: {
+        value: 'http://127.0.0.1:8642/v1',
+        source: 'Hermes /health',
+        verified: true,
+        health: { ok: true, url: 'http://127.0.0.1:8642/health' },
+      },
+    },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'hermes',
+          autoInstallAvailable: true,
+          mode: 'remote-script',
+          url: 'https://hermes-agent.nousresearch.com/install.sh',
+          runner: { command: 'bash', argsBeforeScript: [] },
+          scriptExtension: '.sh',
+          displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+          sourceUrl: 'https://hermes-agent.nousresearch.com/docs/',
+          docs: { install: 'https://hermes-agent.nousresearch.com/docs/' },
+          afterInstall: 'run `hermes setup --portal`, enable the API server, then run `hermes gateway` until /health responds.',
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return inspectResults.shift()
+      },
+      async installRuntime(plan) {
+        calls.push(['install', plan])
+        return { ok: true, command: plan, logs: { stdout: 'hermes-install.out.log', stderr: 'hermes-install.err.log' } }
+      },
+      async probeRuntimeEndpoint(args) {
+        calls.push(['runtime-probe', args.baseUrl])
+        return { ok: true, url: 'http://127.0.0.1:8642/health' }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start is declined')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'install', 'framework', 'runtime-probe', 'bridge-health', 'bridge-plan'])
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, true)
+  assert.equal(result.runtimeSetup.baseUrl, 'http://127.0.0.1:8642/v1')
+  assert.equal(result.runtimeSetup.model, 'hermes-agent')
+  assert.equal(result.runtimeSetup.profile, 'hermes')
+  assert.match(stdout.text, /Hermes official install command is available for this OS/)
+  assert.match(stdout.text, /Official install command: curl -fsSL https:\/\/hermes-agent\.nousresearch\.com\/install\.sh \| bash/)
+  assert.match(stdout.text, /Installing Hermes with official installer/)
+  assert.match(stdout.text, /Hermes installer completed; logs: hermes-install\.out\.log, hermes-install\.err\.log/)
+  assert.match(stdout.text, /Rechecking Hermes CLI after install/)
+  assert.match(stdout.text, /Hermes install: `hermes --version` detected/)
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('quickstart --yes does not run runtime installers unless --install-runtime is explicit', async () => {
+  const calls = []
+  const stdout = captureWritable()
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', yes: true, setupBridge: true, runtimeSetup: 'hermes' },
+    {
+      stdout,
+      stderr: stdout,
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'hermes',
+          autoInstallAvailable: true,
+          mode: 'remote-script',
+          url: 'https://hermes-agent.nousresearch.com/install.sh',
+          runner: { command: 'bash', argsBeforeScript: [] },
+          scriptExtension: '.sh',
+          displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+          sourceUrl: 'https://hermes-agent.nousresearch.com/docs/',
+          docs: { install: 'https://hermes-agent.nousresearch.com/docs/' },
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: false,
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'CLI not detected' }],
+          runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+          endpointDefault: { value: '', source: '' },
+        }
+      },
+      async installRuntime() {
+        throw new Error('runtime installer should not run from --yes without --install-runtime')
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start default is no')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'bridge-health', 'bridge-plan'])
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.match(stdout.text, /Skipping Hermes install in --yes automation\. Pass --install-runtime to allow installer execution\./)
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('quickstart --yes --install-runtime can run an approved runtime installer', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const inspectResults = [
+    {
+      framework: 'hermes',
+      installed: false,
+      installCheck: { displayCommand: 'hermes --version' },
+      checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'CLI not detected' }],
+      runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+      endpointDefault: { value: '', source: '' },
+    },
+    {
+      framework: 'hermes',
+      installed: false,
+      installCheck: { displayCommand: 'hermes --version' },
+      checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'PATH not refreshed' }],
+      runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+      endpointDefault: { value: '', source: '' },
+    },
+  ]
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', yes: true, setupBridge: true, runtimeSetup: 'hermes', installRuntime: true },
+    {
+      stdout,
+      stderr: stdout,
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'hermes',
+          autoInstallAvailable: true,
+          mode: 'remote-script',
+          url: 'https://hermes-agent.nousresearch.com/install.sh',
+          runner: { command: 'bash', argsBeforeScript: [] },
+          scriptExtension: '.sh',
+          displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+          sourceUrl: 'https://hermes-agent.nousresearch.com/docs/',
+          docs: { install: 'https://hermes-agent.nousresearch.com/docs/' },
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return inspectResults.shift()
+      },
+      async installRuntime(plan) {
+        calls.push(['install', plan])
+        return { ok: true, command: plan, logs: { stdout: 'hermes-install.out.log', stderr: 'hermes-install.err.log' } }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start default is no')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'install', 'framework', 'bridge-health', 'bridge-plan'])
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.match(stdout.text, /Selected: defaulted Yes/)
+  assert.match(stdout.text, /Hermes installer completed; logs: hermes-install\.out\.log, hermes-install\.err\.log/)
+  assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('quickstart --no-install-runtime suppresses runtime installer prompts', async () => {
+  const calls = []
+  const prompts = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', '2', 'skip', 'n', 'n']
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'install-runtime': false },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt(question) {
+        prompts.push(question)
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'hermes',
+          autoInstallAvailable: true,
+          mode: 'remote-script',
+          url: 'https://hermes-agent.nousresearch.com/install.sh',
+          runner: { command: 'bash', argsBeforeScript: [] },
+          scriptExtension: '.sh',
+          displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+          sourceUrl: 'https://hermes-agent.nousresearch.com/docs/',
+          docs: { install: 'https://hermes-agent.nousresearch.com/docs/' },
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: false,
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'CLI not detected' }],
+          runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+          endpointDefault: { value: '', source: '' },
+        }
+      },
+      async installRuntime() {
+        throw new Error('runtime installer should not run when --no-install-runtime is set')
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start is declined')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'bridge-health', 'bridge-plan'])
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.match(stdout.text, /Runtime installer disabled by --no-install-runtime/)
+  assert(!prompts.some((prompt) => /Install Hermes now/.test(prompt)))
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('quickstart falls back to evidence-only when approved runtime install throws', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', '2', 'y', 'skip', 'n', 'n']
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'hermes',
+          autoInstallAvailable: true,
+          mode: 'remote-script',
+          url: 'https://hermes-agent.nousresearch.com/install.sh',
+          runner: { command: 'bash', argsBeforeScript: [] },
+          scriptExtension: '.sh',
+          displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+          sourceUrl: 'https://hermes-agent.nousresearch.com/docs/',
+          docs: { install: 'https://hermes-agent.nousresearch.com/docs/' },
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'hermes',
+          installed: false,
+          installCheck: { displayCommand: 'hermes --version' },
+          checks: [{ name: 'version', displayCommand: 'hermes --version', ok: false, error: 'CLI not detected' }],
+          runtime: { ok: false, baseUrl: 'http://127.0.0.1:8642/v1', error: 'not running' },
+          endpointDefault: { value: '', source: '' },
+        }
+      },
+      async installRuntime(plan) {
+        calls.push(['install', plan])
+        throw new Error('installer unavailable in test')
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: false, error: 'connection refused', url: bridgeUrl }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async startBridgeCommand() {
+        throw new Error('bridge command should not run when background start is declined')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'install', 'bridge-health', 'bridge-plan'])
+  assert.equal(result.runtimeSetup.choice, 'hermes')
+  assert.equal(result.runtimeSetup.configured, false)
+  assert.equal(result.runtimeSetup.fallback, 'evidence-only')
+  assert.match(stdout.text, /Hermes install failed; logs: not captured/)
+  assert.match(stdout.text, /QuickStart will continue\. Enter a running endpoint below, or press Enter\/skip for evidence-only\./)
+  assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+})
+
+test('runtimeInstallPlan uses official OS-specific installer allowlist', () => {
+  const hermesWindows = runtimeInstallPlan({ id: 'hermes' }, { platform: 'win32' })
+  assert.equal(hermesWindows.autoInstallAvailable, true)
+  assert.equal(hermesWindows.mode, 'remote-script')
+  assert.equal(hermesWindows.runner.command, 'powershell.exe')
+  assert.equal(hermesWindows.url, 'https://hermes-agent.nousresearch.com/install.ps1')
+  assert.match(hermesWindows.displayCommand, /install\.ps1/)
+
+  const hermesLinux = runtimeInstallPlan({ id: 'hermes' }, { platform: 'linux' })
+  assert.equal(hermesLinux.autoInstallAvailable, true)
+  assert.equal(hermesLinux.runner.command, 'bash')
+  assert.equal(hermesLinux.url, 'https://hermes-agent.nousresearch.com/install.sh')
+
+  const hermesUnsupported = runtimeInstallPlan({ id: 'hermes' }, { platform: 'freebsd' })
+  assert.equal(hermesUnsupported.autoInstallAvailable, false)
+  assert.match(hermesUnsupported.reason, /not enabled by this allowlist/)
+
+  const deepAgentsLinux = runtimeInstallPlan({ id: 'deepagents' }, { platform: 'linux' })
+  assert.equal(deepAgentsLinux.autoInstallAvailable, true)
+  assert.equal(deepAgentsLinux.runner.command, 'bash')
+  assert.equal(deepAgentsLinux.url, 'https://langch.in/dcode')
+
+  const deepAgentsWindows = runtimeInstallPlan({ id: 'deepagents' }, { platform: 'win32' })
+  assert.equal(deepAgentsWindows.autoInstallAvailable, false)
+  assert.match(deepAgentsWindows.reason, /not support native Windows/)
+
+  const deepAgentsUnsupported = runtimeInstallPlan({ id: 'deepagents' }, { platform: 'android' })
+  assert.equal(deepAgentsUnsupported.autoInstallAvailable, false)
+  assert.match(deepAgentsUnsupported.reason, /not enabled by this allowlist/)
+})
+
+test('runRuntimeInstallPlan downloads official script, runs fixed argv, scrubs env, and writes logs', async () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-runtime-install-'))
+  const calls = []
+  const plan = {
+    runtime: 'hermes',
+    autoInstallAvailable: true,
+    mode: 'remote-script',
+    url: 'https://hermes-agent.nousresearch.com/install.sh',
+    runner: { command: 'bash', argsBeforeScript: [] },
+    scriptExtension: '.sh',
+    displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+  }
+
+  const result = await runRuntimeInstallPlan(plan, {
+    logDir,
+    env: {
+      PATH: 'safe-path',
+      HOME: '/safe/home',
+      LC_ALL: 'C',
+      KEEP_ME: 'drop-me',
+      OPENAI_API_KEY: 'secret-openai',
+      ANTHROPIC_API_KEY: 'secret-anthropic',
+      GOOGLE_API_KEY: 'secret-google',
+      GROQ_API_KEY: 'secret-groq',
+      COHERE_API_KEY: 'secret-cohere',
+      LANGSMITH_API_KEY: 'secret-langsmith',
+      TAVILY_API_KEY: 'secret-tavily',
+      HERMES_BASE_URL: 'http://private-hermes.example.invalid/v1',
+      LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://private-bridge.example.invalid/v1',
+    },
+    async downloader(url, destination, options) {
+      calls.push({ type: 'download', url, destination, options })
+      writeFileSync(destination, '#!/usr/bin/env bash\nexit 0\n', 'utf8')
+      return { path: destination, bytes: 27, url }
+    },
+    async commandRunner(command, args, options) {
+      calls.push({ type: 'run', command, args, options })
+      return { status: 0, signal: null, stdout: 'installed\n', stderr: '' }
+    },
+  })
+
+  const download = calls.find((call) => call.type === 'download')
+  const run = calls.find((call) => call.type === 'run')
+  assert(download)
+  assert(run)
+  assert.equal(download.url, 'https://hermes-agent.nousresearch.com/install.sh')
+  assert.equal(run.command, 'bash')
+  assert.deepEqual(run.args, [download.destination])
+  assert.equal(run.options.env.PATH, 'safe-path')
+  assert.equal(run.options.env.HOME, '/safe/home')
+  assert.equal(run.options.env.LC_ALL, 'C')
+  assert.equal(run.options.env.KEEP_ME, undefined)
+  assert.equal(run.options.env.OPENAI_API_KEY, undefined)
+  assert.equal(run.options.env.ANTHROPIC_API_KEY, undefined)
+  assert.equal(run.options.env.GOOGLE_API_KEY, undefined)
+  assert.equal(run.options.env.GROQ_API_KEY, undefined)
+  assert.equal(run.options.env.COHERE_API_KEY, undefined)
+  assert.equal(run.options.env.LANGSMITH_API_KEY, undefined)
+  assert.equal(run.options.env.TAVILY_API_KEY, undefined)
+  assert.equal(run.options.env.HERMES_BASE_URL, undefined)
+  assert.equal(run.options.env.LLMWIKI_AGENT_BRIDGE_BASE_URL, undefined)
+  assert.equal(result.ok, true)
+  assert.equal(result.script.path, download.destination)
+  assert.equal(readFileSync(result.logs.stdout, 'utf8'), 'installed\n')
+  assert.equal(readFileSync(result.logs.stderr, 'utf8'), '')
+})
+
+test('downloadRuntimeInstallerScript rejects HTTP final URLs after redirects', async (t) => {
+  const previousFetch = globalThis.fetch
+  const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-runtime-download-'))
+  const destination = join(logDir, 'installer.sh')
+  globalThis.fetch = async () => ({
+    ok: true,
+    url: 'http://example.invalid/install.sh',
+    async arrayBuffer() {
+      return Buffer.from('#!/usr/bin/env bash\n')
+    },
+  })
+  t.after(() => {
+    globalThis.fetch = previousFetch
+  })
+
+  await assert.rejects(
+    () => downloadRuntimeInstallerScript('https://example.invalid/install.sh', destination),
+    /final URL must use https: http:/,
+  )
 })
 
 test('startBridgeCommand delegates Windows .cmd bridge commands directly to cross-platform spawn adapter', () => {

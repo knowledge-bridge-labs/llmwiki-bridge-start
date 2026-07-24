@@ -325,6 +325,25 @@ onboarding harness.
   - Targeted screen-transition tests passed.
   - `npm run check` passed with syntax checks, 94 Node tests, and package
     dry-run.
+- Follow-up runtime installer approval gate:
+  - This supersedes the earlier "guidance only" installer posture for the
+    documented Hermes/DeepAgents CLI install paths while preserving explicit
+    approval and evidence-only fallback.
+  - QuickStart now has official-doc-backed runtime installer plans for Hermes
+    and DeepAgents Code.
+  - Runtime installers are offered only when the selected framework CLI is
+    missing and an OS-supported plan exists. Interactive runs require explicit
+    approval; `--yes` automation still requires `--install-runtime`, and
+    `--no-install-runtime` disables installer prompts.
+  - Installer execution downloads the official HTTPS installer script to
+    `.llmwiki-bridge-start/logs`, runs it through fixed argv runner commands,
+    verifies redirected installer URLs stay HTTPS, writes stdout/stderr logs,
+    and passes only a minimal non-secret environment allowlist to the installer
+    subprocess.
+  - Hermes installation still does not configure API-server secrets or start
+    `hermes gateway`; DeepAgents installation still does not imply a
+    bridge-callable endpoint.
+  - `npm test` passed with 103 Node tests.
 
 ## Commits
 
@@ -352,6 +371,7 @@ onboarding harness.
 - `1d02315` — Use select UI for runtime quickstart
 - `16d7d3b` — Add quickstart screen wordmark
 - current — Use Knowledge Bridge Labs terminal logo
+- current — Add runtime installer approval gate
 
 ## Follow-ups
 

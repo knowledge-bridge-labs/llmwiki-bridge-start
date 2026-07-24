@@ -30,7 +30,10 @@ const DEFAULT_TERMINAL_ROW_FALLBACK = 1000
 const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS = 1500
+const DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 const RUNTIME_FRAMEWORK_COMMAND_MAX_BUFFER = 64 * 1024
+const RUNTIME_INSTALL_COMMAND_MAX_BUFFER = 8 * 1024 * 1024
+const RUNTIME_INSTALL_SCRIPT_MAX_BYTES = 8 * 1024 * 1024
 const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
 const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
@@ -57,6 +60,32 @@ const BRIDGE_RUNTIME_ENV_KEYS_TO_SCRUB = [
   'OPENAI_MODEL',
   'OPENAI_API_KEY',
 ]
+const RUNTIME_INSTALLER_ENV_ALLOWLIST = new Set([
+  'PATH',
+  'Path',
+  'PATHEXT',
+  'COMSPEC',
+  'ComSpec',
+  'SYSTEMROOT',
+  'SystemRoot',
+  'WINDIR',
+  'windir',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'APPDATA',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'SHELL',
+  'TERM',
+  'LANG',
+])
 const RUNTIME_SETUP_SKIP = 'skip'
 const RUNTIME_SETUP_EXISTING = 'existing'
 const RUNTIME_SETUP_HERMES = 'hermes'
@@ -111,6 +140,10 @@ const QUICKSTART_LOGO_BRIDGE = 'local knowledge  ==[ bridge ]==>  coding agents'
 const QUICKSTART_LOGO_WIDTH = 52
 const QUICKSTART_STEP_TOTAL = 5
 const QUICKSTART_SELECTION_PROMPT = 'Select source folders to start (comma-separated ranks, "all", or "q"; default 1)'
+const HERMES_INSTALL_DOCS_URL = 'https://hermes-agent.nousresearch.com/docs/'
+const HERMES_API_DOCS_URL = 'https://docs.openwebui.com/getting-started/quick-start/connect-an-agent/hermes-agent/'
+const DEEPAGENTS_QUICKSTART_DOCS_URL = 'https://docs.langchain.com/oss/python/deepagents/code/quickstart'
+const DEEPAGENTS_PROVIDERS_DOCS_URL = 'https://docs.langchain.com/oss/python/deepagents/code/providers'
 const GENERIC_MARKDOWN_SCORE_CAP = 25
 const VARIANT_NATIVE_LLMWIKI = 'native-llmwiki-openwiki'
 const VARIANT_LLMWIKI_MARKDOWN = 'llmwiki-markdown'
@@ -401,6 +434,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     checkBridgeHealth,
     probeRuntimeEndpoint,
     inspectRuntimeFramework,
+    runtimeInstallPlan,
+    installRuntime: runRuntimeInstallPlan,
     bridgeStartPlan,
     startBridgeCommand,
     waitForBridgeHealth,
@@ -413,6 +448,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
   const prompter = createQuickstartPrompter(io, { yes: boolOption(options.yes ?? options.y) })
   const bridgeUrl = stringOption(options.bridge, DEFAULT_BRIDGE_URL)
   const configPath = stringOption(options.config, defaultConfigPath())
+  const logDir = stringOption(options.logDir ?? options['log-dir'], defaultLogDir())
   const serveInvocation = runtime.resolveServeInvocation(options)
   const roots = discoverRootsFromOptions(options)
   const result = {
@@ -545,7 +581,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       ports: arrayOption(options.port).map((value) => Number.parseInt(value, 10)).filter(Number.isInteger),
       serveInvocation,
       configPath,
-      logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
+      logDir,
     })
     result.sourceUrls = sourceUrlsFromStartedSources(result.started.sources)
     writeStatus(output, ui, 'ok', `Started ${result.started.sources.length} source server(s). Config: ${result.started.configPath}`)
@@ -553,8 +589,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     writeStatus(output, ui, 'info', 'Started source endpoint(s) are healthy. If you skip bridge setup, quickstart will print MCP Streamable HTTP registration URL(s).')
 
     writeQuickstartStep(output, ui, 4, QUICKSTART_STEP_TOTAL, 'Optional bridge setup')
-    writeStatus(output, ui, 'info', 'llmwiki-agent-bridge is optional. Add it when you want one A2A/MCP-style endpoint that can fan out across all selected sources or use a configured LLM runtime.')
-    writeStatus(output, ui, 'info', 'If you skip bridge setup, the direct MCP Streamable HTTP URL(s) printed below are ready to use.')
+    writeBridgeSetupOverview(output, ui)
     if (!await confirmQuickstart(prompter, `Set up llmwiki-agent-bridge as one endpoint for the selected source(s)?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL(s).`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
       result.runSummary = writeQuickstartRunSummary({
@@ -574,6 +609,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       output,
       ui,
       options,
+      io,
+      logDir,
     })
     const bridgeOptions = mergeRuntimeSetupOptions(options, result.runtimeSetup)
 
@@ -584,7 +621,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       ui,
       options: bridgeOptions,
       bridgeUrl,
-      logDir: stringOption(options.logDir ?? options['log-dir'], defaultLogDir()),
+      logDir,
     })
     const smokeOptions = result.bridgeSetup.runtimeConfiguration?.ok === false
       ? mergeRuntimeSetupOptions(options, unconfiguredRuntimeSetup(runtimeSetupChoiceById(RUNTIME_SETUP_SKIP), 'Bridge runtime settings were not applied; quickstart falls back to evidence-only smoke.'))
@@ -674,7 +711,14 @@ function quickstartSelectedBridgeSourceCount(sources, selectedIds = new Set()) {
   return matchingIds || selectedIds.size
 }
 
-async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
+function writeBridgeSetupOverview(output, ui) {
+  writeStatus(output, ui, 'ok', 'Simple path: llmwiki-serve alone is enough when your coding agent can register the direct source MCP URL(s) printed by QuickStart.')
+  writeStatus(output, ui, 'info', 'Add llmwiki-agent-bridge only when you want one A2A/MCP-style bridge endpoint for multiple selected sources or a configured LLM runtime.')
+  writeStatus(output, ui, 'info', 'Runtime path: connect an already running Hermes/DeepAgents endpoint, or choose a framework and let QuickStart offer official install guidance when the CLI is missing.')
+  writeStatus(output, ui, 'info', 'If you skip bridge setup, the direct MCP Streamable HTTP URL(s) printed below are ready to use.')
+}
+
+async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = {}, logDir = defaultLogDir() }) {
   const requestedChoice = requestedRuntimeSetupChoice(options)
   if (requestedChoice?.id === RUNTIME_SETUP_EXISTING) {
     writeStatus(output, ui, 'info', 'Using explicitly requested preconfigured LLM endpoint. This compatibility path is not part of the default QuickStart menu.')
@@ -722,6 +766,9 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
 
   let frameworkStatus = null
   if (choice.id === RUNTIME_SETUP_HERMES || choice.id === RUNTIME_SETUP_DEEPAGENTS) {
+    const installPlan = runtime.runtimeInstallPlan
+      ? runtime.runtimeInstallPlan(choice, { platform: process.platform })
+      : runtimeInstallPlan(choice)
     frameworkStatus = await runtime.inspectRuntimeFramework({
       choice,
       options,
@@ -730,7 +777,19 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime }) {
       commandRunner: runtime.runFrameworkCommand || runBufferedCommand,
     })
     writeRuntimeFrameworkStatus(output, ui, choice, frameworkStatus)
-    writeRuntimeInstallGuidance(output, ui, choice, frameworkStatus)
+    writeRuntimeInstallGuidance(output, ui, choice, frameworkStatus, installPlan)
+    frameworkStatus = await maybeInstallRuntimeFramework({
+      choice,
+      status: frameworkStatus,
+      installPlan,
+      prompter,
+      output,
+      ui,
+      options,
+      runtime,
+      io,
+      logDir,
+    })
   }
 
   return promptRuntimeConnection({
@@ -863,20 +922,29 @@ function formatHermesRuntimeProbeTarget(status = {}) {
   return firstProbe?.baseUrl || status.endpointDefault?.rejected?.value || DEFAULT_BRIDGE_RUNTIME_BASE_URL
 }
 
-function writeRuntimeInstallGuidance(output, ui, choice, status = {}) {
-  const installPlan = runtimeInstallPlan(choice)
-  if (installPlan.autoInstallAvailable) {
-    writeStatus(output, ui, 'info', `${choice.label} install command is documented for this repository. Quickstart can run it only after explicit approval.`)
-    output.write(`  ${formatCommand(installPlan.command)}\n`)
+function writeRuntimeInstallGuidance(output, ui, choice, status = {}, installPlan = runtimeInstallPlan(choice)) {
+  const label = frameworkDisplayName(choice)
+  if (status.installed) {
+    writeStatus(output, ui, 'info', `${label} CLI is installed. QuickStart will not run an installer.`)
     return
   }
-  const label = frameworkDisplayName(choice)
-  writeStatus(output, ui, 'info', `No repo-confirmed auto-install command for ${label} was found, so quickstart will not install it automatically.`)
+  if (installPlan.autoInstallAvailable) {
+    writeStatus(output, ui, 'info', `${label} official install command is available for this OS. QuickStart can run it only after explicit approval.`)
+    output.write([
+      `Official install command: ${installPlan.displayCommand || formatCommand(installPlan)}`,
+      installPlan.executionNote ? `QuickStart execution: ${installPlan.executionNote}` : '',
+      `Docs: ${installPlan.docs?.install || installPlan.sourceUrl}`,
+      installPlan.afterInstall ? `After install: ${installPlan.afterInstall}` : '',
+    ].filter(Boolean).join('\n') + '\n')
+    return
+  }
+  const unavailableReason = installPlan.reason ? ` ${installPlan.reason}` : ''
+  writeStatus(output, ui, 'info', `QuickStart cannot auto-install ${label} on this OS.${unavailableReason}`)
   if (choice.id === RUNTIME_SETUP_DEEPAGENTS) {
     const installAction = status.installed
       ? 'DeepAgents Code appears installed. Use dcode doctor and dcode config show --json for its own supported diagnostics.'
       : 'Install DeepAgents Code from its official docs or trusted local project, then verify it with dcode --version or dcode doctor.'
-    const docsLines = Object.values(status.docs || {}).filter(Boolean).map((url) => `Docs: ${url}`)
+    const docsLines = Object.values({ ...(installPlan.docs || {}), ...(status.docs || {}) }).filter(Boolean).map((url) => `Docs: ${url}`)
     output.write([
       `Safe ${label} path: ${installAction}`,
       ...docsLines,
@@ -888,7 +956,7 @@ function writeRuntimeInstallGuidance(output, ui, choice, status = {}) {
   const installAction = status.installed
     ? `${label} appears installed. Start or configure its supported runtime endpoint, then enter that endpoint below.`
     : `Install ${label} from its official docs or trusted local project, then start it until it exposes a supported endpoint.`
-  const docsLines = Object.values(status.docs || {}).filter(Boolean).map((url) => `Docs: ${url}`)
+  const docsLines = Object.values({ ...(installPlan.docs || {}), ...(status.docs || {}) }).filter(Boolean).map((url) => `Docs: ${url}`)
   output.write([
     `Safe ${label} path: ${installAction}`,
     ...docsLines,
@@ -896,12 +964,353 @@ function writeRuntimeInstallGuidance(output, ui, choice, status = {}) {
   ].join('\n') + '\n')
 }
 
-function runtimeInstallPlan(choice) {
+async function maybeInstallRuntimeFramework({ choice, status = {}, installPlan = null, prompter, output, ui, options = {}, runtime = {}, io = {}, logDir = defaultLogDir() } = {}) {
+  if (status.installed) {
+    return status
+  }
+  installPlan = installPlan || (runtime.runtimeInstallPlan
+    ? runtime.runtimeInstallPlan(choice, { platform: process.platform })
+    : runtimeInstallPlan(choice))
+  if (!installPlan.autoInstallAvailable) {
+    return status
+  }
+
+  const label = frameworkDisplayName(choice)
+  const installOption = runtimeInstallOption(options)
+  if (installOption === false) {
+    writeStatus(output, ui, 'skip', `Runtime installer disabled by --no-install-runtime. Continue by entering a running ${label} endpoint below, or press Enter/skip for evidence-only.`)
+    return status
+  }
+  const explicitInstallOptIn = installOption === true
+  if (boolOption(options.yes ?? options.y) && !explicitInstallOptIn) {
+    writeStatus(output, ui, 'skip', `Skipping ${label} install in --yes automation. Pass --install-runtime to allow installer execution.`)
+    return status
+  }
+  const approved = await confirmQuickstart(
+    prompter,
+    `Install ${label} now using the official command shown above?\nThis downloads and runs the installer from ${installPlan.sourceUrl || installPlan.docs?.install}. Use --no-install-runtime to suppress this prompt or --install-runtime with --yes for automation.`,
+    explicitInstallOptIn,
+  )
+  if (!approved) {
+    writeStatus(output, ui, 'skip', `Skipped ${label} install. Continue by entering a running endpoint below, or press Enter/skip for evidence-only.`)
+    return status
+  }
+
+  const installRuntime = runtime.installRuntime || runRuntimeInstallPlan
+  const progress = createQuickstartHeartbeatProgress(io || { stdout: output }, ui, { phase: 'runtimeInstall' })
+  progress.start(`Installing ${label} with official installer...`)
+  let installResult
+  try {
+    installResult = await installRuntime(installPlan, {
+      logDir,
+      cwd: process.cwd(),
+      timeoutMs: DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS,
+    })
+  } catch (error) {
+    installResult = {
+      ok: false,
+      error: error.message || String(error),
+      logs: null,
+    }
+  }
+  status.installAttempt = installResult
+  if (!installResult.ok) {
+    progress.error(`${label} install failed; logs: ${formatRuntimeInstallLogSummary(installResult.logs)}`)
+    writeStatus(output, ui, 'info', 'QuickStart will continue. Enter a running endpoint below, or press Enter/skip for evidence-only.')
+    return status
+  }
+
+  progress.stop(`${label} installer completed; logs: ${formatRuntimeInstallLogSummary(installResult.logs)}`)
+  writeStatus(output, ui, 'run', `Rechecking ${label} CLI after install.`)
+  const refreshed = await runtime.inspectRuntimeFramework({
+    choice,
+    options,
+    env: process.env,
+    probe: runtime.probeRuntimeEndpoint || probeRuntimeEndpoint,
+    commandRunner: runtime.runFrameworkCommand || runBufferedCommand,
+  })
+  refreshed.installAttempt = installResult
+  writeRuntimeFrameworkStatus(output, ui, choice, refreshed)
+  return refreshed
+}
+
+function runtimeInstallOption(options = {}) {
+  if (Object.hasOwn(Object(options), 'installRuntime')) {
+    return boolOption(options.installRuntime)
+  }
+  if (Object.hasOwn(Object(options), 'install-runtime')) {
+    return boolOption(options['install-runtime'])
+  }
+  return null
+}
+
+export function runtimeInstallPlan(choice, { platform = process.platform } = {}) {
+  const id = runtimeFrameworkId(choice)
+  if (id === RUNTIME_SETUP_HERMES) {
+    if (platform === 'win32') {
+      return {
+        runtime: RUNTIME_SETUP_HERMES,
+        autoInstallAvailable: true,
+        mode: 'remote-script',
+        url: 'https://hermes-agent.nousresearch.com/install.ps1',
+        runner: {
+          command: 'powershell.exe',
+          argsBeforeScript: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
+        },
+        scriptExtension: '.ps1',
+        displayCommand: 'iex (irm https://hermes-agent.nousresearch.com/install.ps1)',
+        executionNote: 'downloads the same official HTTPS installer script to the QuickStart log directory, then runs powershell.exe -File <downloaded-script>.',
+        sourceUrl: HERMES_INSTALL_DOCS_URL,
+        docs: {
+          install: HERMES_INSTALL_DOCS_URL,
+          apiServer: HERMES_API_DOCS_URL,
+        },
+        afterInstall: 'run `hermes setup --portal`, enable the API server, then run `hermes gateway` until /health responds.',
+        timeoutMs: DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS,
+      }
+    }
+    if (!hermesInstallerSupportsPlatform(platform)) {
+      return unsupportedRuntimeInstallPlan({
+        runtime: RUNTIME_SETUP_HERMES,
+        sourceUrl: HERMES_INSTALL_DOCS_URL,
+        docs: {
+          install: HERMES_INSTALL_DOCS_URL,
+          apiServer: HERMES_API_DOCS_URL,
+        },
+        reason: `Hermes Agent official CLI installer is recorded for Windows, Linux, macOS, WSL2, and Android Termux; ${platform} is not enabled by this allowlist.`,
+      })
+    }
+    return {
+      runtime: RUNTIME_SETUP_HERMES,
+      autoInstallAvailable: true,
+      mode: 'remote-script',
+      url: 'https://hermes-agent.nousresearch.com/install.sh',
+      runner: {
+        command: 'bash',
+        argsBeforeScript: [],
+      },
+      scriptExtension: '.sh',
+      displayCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+      executionNote: 'downloads the same official HTTPS installer script to the QuickStart log directory, then runs bash <downloaded-script>.',
+      sourceUrl: HERMES_INSTALL_DOCS_URL,
+      docs: {
+        install: HERMES_INSTALL_DOCS_URL,
+        apiServer: HERMES_API_DOCS_URL,
+      },
+      afterInstall: 'run `hermes setup --portal`, enable the API server, then run `hermes gateway` until /health responds.',
+      timeoutMs: DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS,
+    }
+  }
+  if (id === RUNTIME_SETUP_DEEPAGENTS) {
+    if (platform === 'win32') {
+      return unsupportedRuntimeInstallPlan({
+        runtime: RUNTIME_SETUP_DEEPAGENTS,
+        sourceUrl: DEEPAGENTS_QUICKSTART_DOCS_URL,
+        docs: {
+          install: DEEPAGENTS_QUICKSTART_DOCS_URL,
+          providers: DEEPAGENTS_PROVIDERS_DOCS_URL,
+        },
+        reason: 'DeepAgents Code official docs do not support native Windows; use WSL for the installer path.',
+      })
+    }
+    if (!deepAgentsInstallerSupportsPlatform(platform)) {
+      return unsupportedRuntimeInstallPlan({
+        runtime: RUNTIME_SETUP_DEEPAGENTS,
+        sourceUrl: DEEPAGENTS_QUICKSTART_DOCS_URL,
+        docs: {
+          install: DEEPAGENTS_QUICKSTART_DOCS_URL,
+          providers: DEEPAGENTS_PROVIDERS_DOCS_URL,
+        },
+        reason: `DeepAgents Code official installer is recorded for Linux, macOS, and WSL2; ${platform} is not enabled by this allowlist.`,
+      })
+    }
+    return {
+      runtime: RUNTIME_SETUP_DEEPAGENTS,
+      autoInstallAvailable: true,
+      mode: 'remote-script',
+      url: 'https://langch.in/dcode',
+      runner: {
+        command: 'bash',
+        argsBeforeScript: [],
+      },
+      scriptExtension: '.sh',
+      displayCommand: 'curl -LsSf https://langch.in/dcode | bash',
+      executionNote: 'downloads the same official HTTPS installer script to the QuickStart log directory, then runs bash <downloaded-script>.',
+      sourceUrl: DEEPAGENTS_QUICKSTART_DOCS_URL,
+      docs: {
+        install: DEEPAGENTS_QUICKSTART_DOCS_URL,
+        providers: DEEPAGENTS_PROVIDERS_DOCS_URL,
+      },
+      afterInstall: 'configure DeepAgents credentials with its `/auth` flow in a DeepAgents session, or with `dcode auth set`. QuickStart still needs an explicit bridge runtime endpoint if delegated-runtime is desired.',
+      timeoutMs: DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS,
+    }
+  }
   return {
-    runtime: choice.id,
+    runtime: id,
     autoInstallAvailable: false,
     command: null,
+    args: [],
+    reason: 'No official install command is registered for this runtime profile.',
   }
+}
+
+function hermesInstallerSupportsPlatform(platform) {
+  return ['linux', 'darwin', 'android'].includes(String(platform || ''))
+}
+
+function deepAgentsInstallerSupportsPlatform(platform) {
+  return ['linux', 'darwin'].includes(String(platform || ''))
+}
+
+function unsupportedRuntimeInstallPlan({ runtime, sourceUrl, docs, reason }) {
+  return {
+    runtime,
+    autoInstallAvailable: false,
+    command: null,
+    args: [],
+    sourceUrl,
+    docs,
+    reason,
+  }
+}
+
+export async function runRuntimeInstallPlan(plan = {}, {
+  commandRunner = runBufferedCommand,
+  downloader = downloadRuntimeInstallerScript,
+  logDir = defaultLogDir(),
+  cwd = process.cwd(),
+  env = process.env,
+  timeoutMs = DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS,
+} = {}) {
+  if (!plan.autoInstallAvailable || (!plan.command && plan.mode !== 'remote-script')) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: plan.reason || 'runtime install plan is unavailable',
+      command: plan,
+    }
+  }
+  mkdirSync(logDir, { recursive: true })
+  const logs = runtimeInstallLogPaths(logDir, plan)
+  let commandPlan = plan
+  let script = null
+  if (plan.mode === 'remote-script') {
+    const scriptPath = runtimeInstallScriptPath(logDir, plan)
+    try {
+      script = await downloader(plan.url, scriptPath, {
+        timeoutMs: 60000,
+        maxBytes: RUNTIME_INSTALL_SCRIPT_MAX_BYTES,
+      })
+    } catch (error) {
+      writeFileSync(logs.stdout, '', 'utf8')
+      writeFileSync(logs.stderr, `Failed to download installer: ${error.message || String(error)}\n`, 'utf8')
+      return {
+        ok: false,
+        status: null,
+        signal: null,
+        error: error.message || String(error),
+        command: plan,
+        commandText: plan.displayCommand || String(plan.url || ''),
+        logs,
+      }
+    }
+    commandPlan = {
+      command: plan.runner?.command,
+      args: [...(plan.runner?.argsBeforeScript || []), script.path],
+    }
+  }
+  let result
+  try {
+    result = await commandRunner(commandPlan.command, commandPlan.args || [], {
+      cwd,
+      timeoutMs: plan.timeoutMs || timeoutMs,
+      maxBuffer: RUNTIME_INSTALL_COMMAND_MAX_BUFFER,
+      env: scrubInstallerEnv(env),
+    })
+  } catch (error) {
+    result = { error, status: null, signal: null, stdout: '', stderr: '' }
+  }
+  writeFileSync(logs.stdout, result.stdout || '', 'utf8')
+  writeFileSync(logs.stderr, result.stderr || '', 'utf8')
+  const ok = !result.error && result.status === 0
+  return {
+    ok,
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message || (!ok ? `installer exited ${result.status ?? result.signal ?? 'unknown'}` : ''),
+    command: plan,
+    executedCommand: commandPlan,
+    commandText: plan.displayCommand || formatCommand(plan),
+    script,
+    logs,
+  }
+}
+
+function runtimeInstallLogPaths(logDir, plan = {}) {
+  const token = safeLogToken(plan.runtime || 'runtime')
+  return {
+    stdout: join(logDir, `${token}-install.out.log`),
+    stderr: join(logDir, `${token}-install.err.log`),
+  }
+}
+
+function runtimeInstallScriptPath(logDir, plan = {}) {
+  const token = safeLogToken(plan.runtime || 'runtime')
+  const extension = String(plan.scriptExtension || '.installer')
+  return join(logDir, `${token}-install${extension}`)
+}
+
+export async function downloadRuntimeInstallerScript(url, destination, { timeoutMs = 60000, maxBytes = RUNTIME_INSTALL_SCRIPT_MAX_BYTES } = {}) {
+  const parsed = new URL(String(url || ''))
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Runtime installer URL must use https: ${parsed.protocol}`)
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(parsed, { signal: controller.signal })
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`)
+    }
+    const finalUrl = new URL(response.url || parsed.toString())
+    if (finalUrl.protocol !== 'https:') {
+      throw new Error(`Runtime installer final URL must use https: ${finalUrl.protocol}`)
+    }
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.byteLength > maxBytes) {
+      throw new Error(`installer script exceeded ${maxBytes} bytes`)
+    }
+    writeFileSync(destination, body)
+    return { path: destination, bytes: body.byteLength, url: finalUrl.toString() }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function scrubInstallerEnv(env = process.env) {
+  const clean = {}
+  for (const [key, value] of Object.entries(env || {})) {
+    if (RUNTIME_INSTALLER_ENV_ALLOWLIST.has(key) || key.startsWith('LC_')) {
+      clean[key] = value
+    }
+  }
+  return clean
+}
+
+function safeLogToken(value) {
+  return String(value || 'runtime')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'runtime'
+}
+
+function formatRuntimeInstallLogSummary(logs = {}) {
+  logs = logs || {}
+  if (!logs.stdout && !logs.stderr) {
+    return 'not captured'
+  }
+  return [logs.stdout, logs.stderr].filter(Boolean).join(', ')
 }
 
 async function promptRuntimeConnection({ prompter, output, ui, options, choice, runtime: runtimeApi = { probeRuntimeEndpoint }, frameworkStatus = null }) {
@@ -4886,12 +5295,13 @@ function yieldToEventLoop() {
   })
 }
 
-function runBufferedCommand(command, args = [], { cwd = process.cwd(), timeoutMs = 0, maxBuffer = FAST_DISCOVERY_MAX_BUFFER } = {}) {
+function runBufferedCommand(command, args = [], { cwd = process.cwd(), timeoutMs = 0, maxBuffer = FAST_DISCOVERY_MAX_BUFFER, env = process.env } = {}) {
   return new Promise((resolveCommand) => {
     let child
     try {
       child = nodeSpawn(command, args, {
         cwd,
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
@@ -5096,8 +5506,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes] [--no-clear-screen]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--serve-command CMD] [--yes] [--no-clear-screen]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -5119,6 +5529,7 @@ Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
 Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
 After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, Hermes, or DeepAgents.
+If a selected runtime CLI is missing, interactive quickstart may offer an official installer after explicit approval; --yes automation still requires --install-runtime.
 Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode.
 Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
 `

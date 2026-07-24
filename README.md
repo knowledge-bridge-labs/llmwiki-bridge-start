@@ -55,8 +55,12 @@ loopback source URLs to answer health checks, then explains that those URLs can
 be used directly without
 `llmwiki-agent-bridge`. Bridge setup is optional: if you skip it, quickstart
 prints one coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`)
-per started source, then keeps the final screen concise with an operational
-details file reference. PIDs, log paths, and stop guidance are written to
+per started source. For simple local use, this `llmwiki-serve` direct path is
+already enough when your coding agent can register one or more MCP source URLs.
+Add `llmwiki-agent-bridge` only when you want one bridge endpoint across
+multiple sources or runtime-backed answers. Quickstart keeps the final screen
+concise with an operational details file reference. PIDs, log paths, and stop
+guidance are written to
 `.llmwiki-bridge-start/quickstart-handoff.md`. After you choose source folders,
 quickstart echoes the selected label and full path before validation/start. If
 stdin and stdout are both interactive TTYs, quickstart clears only the visible
@@ -74,17 +78,22 @@ Before starting that bridge command, quickstart asks how to configure the LLM
 runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents. In
 interactive terminals this is a single-select menu; piped/non-interactive runs
 keep numeric text input for scripting compatibility. Hermes and DeepAgents are
-the supported QuickStart runtime profiles. When a repo-confirmed runtime install
-command is not available, quickstart does not auto-install them. Instead it
-prints safe install/start guidance and asks for the endpoint only after the
-runtime is running. Runtime setup checks installed frameworks through their
-supported CLI entrypoints (`hermes --version`,
-`dcode --version`) and uses Hermes API server health (`/health` or
-`/v1/health`) when deciding whether a Hermes endpoint can be offered as the
-Enter default. DeepAgents Code is checked through `dcode`, but quickstart does
-not infer a bridge runtime endpoint from DeepAgents config because no supported
-local endpoint discovery contract is recorded here. Quickstart also does not
-treat legacy or user-local runtime aliases such as `HERMES_BASE_URL`,
+the supported QuickStart runtime profiles. If the selected runtime CLI is
+missing and an official OS-specific installer is recorded here, interactive
+quickstart shows the exact documented install command, downloads the official
+HTTPS installer script to `.llmwiki-bridge-start/logs`, and runs it only after
+explicit approval. `--yes` automation still does not run runtime installers
+unless `--install-runtime` is also passed; use `--no-install-runtime` to suppress
+the installer prompt. Installation success only means the CLI was installed:
+Hermes still needs its own setup/API-server configuration and `hermes gateway`;
+DeepAgents still needs its own provider/auth setup. Runtime setup checks
+installed frameworks through their supported CLI entrypoints (`hermes --version`,
+`dcode --version`) and uses Hermes API server health (`/health` or `/v1/health`)
+when deciding whether a Hermes endpoint can be offered as the Enter default.
+DeepAgents Code is checked through `dcode`, but quickstart does not infer a
+bridge runtime endpoint from DeepAgents config because no supported local
+endpoint discovery contract is recorded here. Quickstart also does not treat
+legacy or user-local runtime aliases such as `HERMES_BASE_URL`,
 `DEEPAGENTS_BASE_URL`, or `OPENAI_BASE_URL` as first-run defaults. If a default
 endpoint is shown, it came from an explicit CLI flag, the standard
 `LLMWIKI_AGENT_BRIDGE_BASE_URL`, or a framework-supported local health probe

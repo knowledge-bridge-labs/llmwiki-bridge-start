@@ -48,10 +48,9 @@ a low-friction way to find usable LLMWiki-compatible folders, start
   `llmwiki-serve manifest` validation.
 - Crawling remote wikis, syncing app state, or publishing static sites.
 - Owning model runtime lifecycle, Redis, auth, TLS, Docker, or Kubernetes.
-  Quickstart may guide Hermes or DeepAgents runtime setup, but it must not
-  auto-install or start a runtime unless this repository or directly referenced
-  bridge docs contain a confirmed safe command and the user explicitly approves
-  it.
+  Quickstart may offer explicitly approved CLI installer assistance for
+  first-class runtime profiles, but it must not own runtime credential setup,
+  long-running gateway/service management, or production runtime operations.
 - Replacing `llmwiki-agent-bridge` orchestration.
 - Treating generated local work folders as canonical project docs.
 
@@ -198,7 +197,9 @@ source server.
   must not ask users to kill by broad process name or port.
 - Before asking about bridge setup, `quickstart` must explain what
   `llmwiki-agent-bridge` adds, when it is useful, and that skipping it still
-  leaves direct MCP Streamable HTTP source URLs ready to use. Bridge setup
+  leaves direct MCP Streamable HTTP source URLs ready to use. This copy must
+  make the simple path visually clear: `llmwiki-serve` alone is enough when the
+  user's coding agent can register the direct source MCP URL(s). Bridge setup
   prompts must describe the installation/start intent explicitly, including
   what happens when quickstart starts the bridge command in the background.
 - When the user skips bridge setup, `quickstart` must print one generic
@@ -254,11 +255,27 @@ source server.
 - Hermes and DeepAgents must be presented as first-class bridge runtime
   profiles. If the user already has one running, quickstart must collect its
   endpoint and model, then use the matching fixed runtime profile. If not,
-  quickstart must provide a safe install and start path. Auto-install is
-  allowed only when the current repository or directly referenced bridge docs
-  confirm the exact command/package; otherwise quickstart must not run an
-  installer and must instead print safe guidance, then prompt for the endpoint
-  after the runtime is running.
+  quickstart must provide a safe install and start path. Runtime CLI
+  auto-install is allowed only from a fixed allowlist backed by official
+  runtime docs and only after explicit user approval. Interactive approval may
+  run the official installer; `--yes` automation must not run runtime
+  installers unless `--install-runtime` is also present, and
+  `--no-install-runtime` must suppress installer prompts. Quickstart must
+  download HTTPS installer scripts to the QuickStart log directory and execute
+  them through fixed argv runner commands rather than interpolating user input
+  into a shell command. Installer downloads must require HTTPS for both the
+  initial and final redirected URL. Installer stdout/stderr must be written to
+  logs, and installer subprocesses must receive only a minimal non-secret
+  environment allowlist rather than inherited provider/API-key environment
+  variables. If no official plan exists for the current OS, or if installation
+  fails, quickstart must print safe guidance, then prompt for a running endpoint
+  or continue evidence-only.
+- Runtime CLI installation is not runtime ownership. Quickstart must not write
+  Hermes API-server secrets, run Hermes OAuth setup, start `hermes gateway`,
+  configure DeepAgents provider credentials, run interactive `dcode` sessions
+  or provider setup commands, or claim that DeepAgents exposes a
+  bridge-callable HTTP endpoint unless those actions are separately supported
+  and explicitly approved in a later spec.
 - In interactive terminals, runtime setup must use the same guided prompt style
   as the rest of QuickStart rather than a raw numeric text prompt. Numeric/text
   runtime setup aliases remain supported for non-interactive, piped, injected

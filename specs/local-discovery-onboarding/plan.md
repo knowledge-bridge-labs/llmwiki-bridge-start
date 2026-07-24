@@ -40,10 +40,14 @@
      endpoints, using the matching fixed runtime profile.
    - Keep explicit `--llm-endpoint` support as a preconfigured compatibility
      path, not as an interactive QuickStart menu choice.
-   - Treat Hermes and DeepAgents as bridge runtime profiles. Only offer runtime
-     auto-install execution when this repository or directly referenced bridge
-     docs confirm the exact install command; otherwise print safe installation
-     guidance and ask for the endpoint after the runtime is running.
+   - Treat Hermes and DeepAgents as bridge runtime profiles. Offer runtime CLI
+     auto-install only through a fixed allowlist backed by official runtime
+     docs, show the official command, require explicit approval, download the
+     HTTPS installer script to the QuickStart log directory, and run it through
+     fixed argv runner commands with final redirected URL HTTPS checks and a
+     minimal installer environment allowlist. If installation is skipped,
+     unavailable, or fails, print safe installation guidance and ask for the
+     endpoint after the runtime is running.
    - Feed the runtime setup result into runtime detection, bridge start env, and
      smoke mode selection. If the endpoint is skipped or blank, force the
      evidence-only bridge path for this quickstart run.
@@ -81,10 +85,10 @@
 - Existing bridge registry settings must not be overwritten accidentally.
 - Rich prompt libraries can break automation if used unconditionally; gate
   interactive prompts on TTY and keep fallback output snapshot-tested.
-- Hermes/DeepAgents install commands can drift or be absent from the current
-  docs; do not auto-install unless the command is confirmed in repo docs and the
-  user explicitly approves it. Prefer endpoint entry plus evidence-only fallback
-  when uncertain.
+- Hermes/DeepAgents install commands can drift; keep them in a fixed,
+  documented allowlist sourced from official runtime docs, require explicit
+  approval, and keep `--yes` safe unless `--install-runtime` is also present.
+  Prefer endpoint entry plus evidence-only fallback when uncertain.
 - Hand-written Windows command wrappers can diverge from macOS/Linux behavior;
   rely on `cross-spawn` for bridge process startup.
 - Spawned source processes can fail after launch because of port conflicts,
@@ -115,10 +119,12 @@
 - Quickstart docs must state that endpoint, model, and profile feed
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` for a started bridge.
-- Quickstart docs must state that Hermes/DeepAgents runtime auto-install is not
-  attempted unless a repo-confirmed command exists; otherwise quickstart prints
-  safe installation guidance and continues evidence-only if no endpoint is
-  entered.
+- Quickstart docs must state that Hermes/DeepAgents runtime CLI auto-install is
+  allowed only from the official-doc-backed allowlist and only after explicit
+  approval. Docs must also state that installer logs are written under
+  `.llmwiki-bridge-start/logs`, that `--yes` requires `--install-runtime` before
+  running installers, and that installation does not configure credentials,
+  start Hermes gateway, or let DeepAgents imply a bridge runtime endpoint.
 - Quickstart docs must explain the skip-bridge MCP registration URL handoff and
   avoid client-specific MCP configuration syntax.
 - README Quick Start must move `discover`, `start`, `register`, and `smoke`

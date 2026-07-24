@@ -130,8 +130,10 @@
   line before slow `llmwiki-serve manifest` validation completes while keeping
   non-TTY output stable.
 - Quickstart bridge setup copy explains bridge purpose and direct MCP skip
-  behavior before asking, and the background-start question says that
-  quickstart will run the command detached, write logs, and wait for health.
+  behavior before asking. It explicitly calls out the simple path:
+  `llmwiki-serve` alone is enough when the coding agent can register direct
+  source MCP URL(s). The background-start question says that quickstart will
+  run the command detached, write logs, and wait for health.
 - Quickstart bridge setup approval is followed by a runtime setup choice before
   bridge start. The choice list includes skip/evidence-only, Hermes, and
   DeepAgents, and does not include a generic/existing OpenAI-compatible
@@ -145,12 +147,22 @@
 - Existing running bridge runtime setup applies safe endpoint/model/profile
   fields through `/settings/config.json` before delegated-runtime smoke, and
   avoids sending API keys or bearer tokens.
-- Hermes and DeepAgents runtime setup prints first-class profile guidance and,
-  when no repo-confirmed install command exists, does not auto-install. It
-  prints safe install/start guidance, prompts for an endpoint after the runtime
-  is running, makes blank/default/`skip` behavior explicit, uses the matching
-  fixed runtime profile, and falls back to evidence-only if no endpoint is
-  configured.
+- Hermes and DeepAgents runtime setup prints first-class profile guidance. When
+  an official-doc-backed install plan exists and the CLI is missing, interactive
+  QuickStart displays the official command and runs the installer only after
+  explicit approval. `--yes` does not run runtime installers unless
+  `--install-runtime` is also present, and `--no-install-runtime` suppresses the
+  installer prompt.
+- Runtime installer execution is covered without live installation by injecting
+  downloader/command-runner test doubles. Tests assert fixed argv execution,
+  HTTPS script download to the QuickStart log directory, final redirected URL
+  HTTPS enforcement, stdout/stderr log writes, and minimal installer
+  environment allowlisting that excludes common provider/API-key secrets.
+- If no install plan exists for the current OS, installation is declined, or
+  installation fails, QuickStart prints safe install/start guidance, prompts for
+  an endpoint after the runtime is running, makes blank/default/`skip` behavior
+  explicit, uses the matching fixed runtime profile, and falls back to
+  evidence-only if no endpoint is configured.
 - Runtime endpoint prompts use a shown default when the user presses blank
   Enter, and accept `skip` to force evidence-only even when a default exists.
 - Runtime setup ignores legacy/user-local `HERMES_BASE_URL`,
