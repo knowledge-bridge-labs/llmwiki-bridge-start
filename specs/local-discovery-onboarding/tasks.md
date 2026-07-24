@@ -49,6 +49,11 @@
 - [x] Polish expert-verification onboarding UX follow-ups: constrained-scope
   discovery prompt wording, source port fallback info, and final bridge
   endpoint handoff copy.
+- [x] Implement branch-by-branch expert-evaluation onboarding fixes: custom
+  bridge manual-start env examples for requested host/port, source selection
+  echo, concise lifecycle handoff copy with PIDs/log paths when available,
+  clearer runtime endpoint default/skip prompts, and cheap repeated-`wiki`
+  candidate context.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [ ] Add release workflow and registry trusted publisher setup when ready to
   publish.

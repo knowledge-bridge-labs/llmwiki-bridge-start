@@ -55,24 +55,31 @@ loopback source URLs to answer health checks, then explains that those URLs can
 be used directly without
 `llmwiki-agent-bridge`. Bridge setup is optional: if you skip it, quickstart
 prints one coding-agent MCP Streamable HTTP registration URL (`/mcp/stream`)
-per started source. If you opt in,
-quickstart uses
-an already running bridge or prints a safe start command such as
-`npx --yes llmwiki-agent-bridge@0.1.0` that does not install a global package.
+per started source and notes that started local processes remain running, with
+PIDs and log paths when available. After you choose source folders,
+quickstart echoes the selected label and full path before validation/start. If
+you opt in, quickstart uses an already running bridge or prints copy-pasteable
+PowerShell and POSIX manual-start examples such as
+`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.1.0`;
+custom `--bridge http://host:port` values are reflected in those env
+assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
 runtime for this bridge run: skip/evidence-only, Hermes, or DeepAgents.
 Hermes and DeepAgents are the supported QuickStart runtime profiles. When a
 repo-confirmed runtime install command is not available, quickstart does not
 auto-install them. Instead it prints safe install/start guidance and asks for
-the endpoint after the runtime is running. If you skip runtime setup or leave
-the endpoint blank, quickstart continues with evidence-only bridge smoke.
+the endpoint after the runtime is running. If a default endpoint is shown,
+blank Enter uses that default; type `skip` to force evidence-only. If no
+default endpoint is shown, blank Enter or `skip` continues with evidence-only
+bridge smoke.
 Quickstart runs the bridge start command only after a second explicit
 approval. Once a bridge is running, it merge-registers the started sources and
 runs an A2A-style smoke request. After a successful bridge smoke, quickstart
 prints a concise bridge handoff with the bridge base URL, A2A-style answer
 endpoint (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`),
-and settings UI (`/settings`). The bridge endpoint handoff is separate from
-direct source MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
+settings UI (`/settings`), and a lifecycle note for started local source/bridge
+processes with PIDs and log paths when available. The bridge endpoint handoff
+is separate from direct source MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
 endpoint is configured through flags, quickstart treats it as a preconfigured
 compatibility path without adding it to the interactive first-run menu.
 
@@ -117,6 +124,9 @@ normally skipped area.
 Quickstart intentionally prints full local paths for disambiguation so users can
 distinguish candidate folders before starting servers. Redact or replace those
 paths before publishing screenshots, logs, docs, or issue reports.
+When several visible candidates are all named `wiki`, or a candidate is under
+`.llmwiki-work`, quickstart adds a small parent/project context to the display
+label while still printing the full path on the next line.
 
 ### Advanced/scriptable commands
 

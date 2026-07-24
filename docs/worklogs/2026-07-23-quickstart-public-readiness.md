@@ -131,6 +131,22 @@ onboarding harness.
   find source folders under the shown root(s), while broad home scans keep the
   auto-discover wording. Successful bridge smoke now prints a final bridge
   handoff with base URL, `POST /message:send`, `POST /mcp`, and `/settings`.
+- Follow-up on 2026-07-24: branch-by-branch expert evaluation onboarding
+  fixes now make custom `--bridge http://host:port` manual-start guidance
+  copy-paste safe by printing separate PowerShell and POSIX examples with
+  `LLMWIKI_AGENT_BRIDGE_HOST` and `LLMWIKI_AGENT_BRIDGE_PORT` set to the
+  requested bridge URL, plus configured runtime env when present. When users
+  defer registration/smoke until after a manual bridge start, quickstart now
+  prints the next `register` and `smoke` commands and keeps direct source MCP
+  URLs visible meanwhile.
+- Follow-up on 2026-07-24: quickstart now echoes selected source labels and
+  full paths after selection, adds bounded parent/project context for repeated
+  visible `wiki` basenames and `.llmwiki-work` paths, and prints concise
+  lifecycle notes after direct-source and bridge handoffs with PIDs/log paths
+  when available.
+- Follow-up on 2026-07-24: Hermes/DeepAgents endpoint prompts now state that
+  blank Enter uses a shown default, while `skip` forces evidence-only; when no
+  default is shown, blank Enter or `skip` continues evidence-only.
 
 ## Validation
 
@@ -214,6 +230,11 @@ onboarding harness.
   - Main-agent post-fix smoke confirmed the final bridge handoff prints bridge
     base URL, `POST /message:send`, `POST /mcp`, and `/settings`.
   - `npm run check` passed with 79 Node tests plus package dry-run.
+- Follow-up expert-evaluation onboarding fixes:
+  - `node --check src/index.mjs` passed.
+  - `node --check test/discover.test.mjs` passed.
+  - `node --test test/discover.test.mjs` passed with 81 Node tests.
+  - `npm run check` passed with 81 Node tests plus package dry-run.
 
 ## Commits
 

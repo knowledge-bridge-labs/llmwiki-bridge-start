@@ -163,11 +163,21 @@ source server.
 - `quickstart` must support TTY checkbox-style multi-select source startup,
   preserve comma-separated text selection for non-TTY/automation, and allow a
   successful direct-source-only exit before bridge setup.
+- After source selection, `quickstart` must echo the selected source label(s)
+  and full local path(s), including when the user accepts the default first
+  candidate.
+- When visible candidates have repeated `wiki` basenames or live under
+  `.llmwiki-work`, quickstart should add cheap parent/project context to the
+  display label while preserving the full path line.
 - `quickstart` must explain near the start that a printed, healthy local source
   URL is the minimum successful onboarding outcome and that bridge setup is
   optional.
 - After starting selected sources, `quickstart` must state that direct source
   endpoints are healthy and remain usable if the user skips bridge setup.
+- Direct-source and bridge completion handoffs must mention that started local
+  process(es) remain running after quickstart exits, include PIDs and log paths
+  when available, and provide safe next-action/stop guidance that does not ask
+  users to kill by broad process name or port.
 - Before asking about bridge setup, `quickstart` must explain what
   `llmwiki-agent-bridge` adds, when it is useful, and that skipping it still
   leaves direct MCP Streamable HTTP source URLs ready to use. Bridge setup
@@ -199,6 +209,18 @@ source server.
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE`, but this path must not be advertised
   as a happy-path option.
+- When no bridge is reachable, manual bridge-start guidance must be
+  copy-paste safe for a custom `--bridge http://host:port`: printed examples
+  must include `LLMWIKI_AGENT_BRIDGE_HOST` and
+  `LLMWIKI_AGENT_BRIDGE_PORT` for the requested bridge URL, plus the same safe
+  runtime env fields that quickstart would pass to a background bridge start
+  when a runtime is configured. Shell-specific quoting must be explicit and
+  cross-platform copy should avoid overclaiming one shell's syntax works
+  everywhere.
+- If the user chooses manual bridge startup and defers registration/smoke,
+  quickstart must print the next register and smoke commands for the selected
+  bridge URL and source config, plus direct source MCP URLs that remain usable
+  meanwhile.
 - If `llmwiki-agent-bridge` is already running and the user configures a
   runtime endpoint during quickstart, quickstart must apply safe runtime fields
   through the bridge settings API before registration and smoke. If that live
@@ -221,6 +243,10 @@ source server.
   input, quickstart must continue with an evidence-only bridge path and print a
   clear next action for rerunning with `--llm-endpoint`, `--llm-model`, and
   `--runtime-profile`.
+- Hermes and DeepAgents endpoint prompts must make default behavior explicit:
+  if a default endpoint is shown, blank Enter uses that default and `skip`
+  forces evidence-only; if no default is shown, blank Enter or `skip` continues
+  evidence-only.
 - Runtime setup results must flow through the same runtime detection path used
   by bridge startup env construction and bridge smoke mode selection. An
   explicit skip/evidence-only runtime setup choice must prevent inherited

@@ -74,12 +74,20 @@
   (`/mcp/stream`) for every started source without asserting client-specific
   configuration syntax or printing extra source/health/manifest/MCP JSON-RPC
   URL labels.
+- Quickstart direct-source handoff includes lifecycle copy stating that started
+  local source processes remain running and prints PIDs/log paths when
+  available.
 - Quickstart success copy treats a healthy printed local source URL as the
   minimum onboarding success and describes bridge setup as optional.
 - Quickstart default source selection hides advanced/lower-priority
   app/generic/noisy
   candidates, keeps `all` scoped to the currently listed candidates, and
   validates/starts only recommended selections.
+- Quickstart echoes selected source label(s) and full path(s) before
+  validation/start, including defaulted first-candidate selection.
+- Quickstart candidate display adds parent/project context for repeated
+  visible `wiki` basenames and `.llmwiki-work` paths while preserving full path
+  output.
 - Quickstart `--include-additional` renders recommended and
   advanced/lower-priority candidates as separate sections, including app vaults,
   graphs, workspaces, generic Markdown folders, and noisy paths, and allows
@@ -127,13 +135,22 @@
 - Hermes and DeepAgents runtime setup prints first-class profile guidance and,
   when no repo-confirmed install command exists, does not auto-install. It
   prints safe install/start guidance, prompts for an endpoint after the runtime
-  is running, uses the matching fixed runtime profile, and falls back to
-  evidence-only if the endpoint is blank.
+  is running, makes blank/default/`skip` behavior explicit, uses the matching
+  fixed runtime profile, and falls back to evidence-only if no endpoint is
+  configured.
+- Runtime endpoint prompts use a shown default when the user presses blank
+  Enter, and accept `skip` to force evidence-only even when a default exists.
 - Runtime setup skip/evidence-only disables inherited runtime env detection for
   the quickstart bridge smoke path.
 - Evidence-only or unconfigured bridge startup scrubs inherited runtime/API-key
   environment variables from the spawned bridge child process while preserving
   normal environment and explicit bridge host/port settings.
+- Manual bridge-start examples include requested custom bridge host/port env
+  values, plus configured runtime env values, in separate PowerShell and POSIX
+  forms.
+- Deferred manual bridge setup prints follow-up `register` and `smoke`
+  commands for the selected bridge URL/source config and keeps direct source
+  MCP URLs visible while the bridge is not registered yet.
 - Quickstart bridge path: explicit bridge setup approval, merge registration,
   and smoke mode selection.
 - Quickstart port fallback UX: when requested source port startup falls back
@@ -142,7 +159,8 @@
 - Quickstart bridge success handoff: after registration and smoke, the
   transcript lists bridge base URL, `POST /message:send`, `POST /mcp`, and
   `/settings` without describing the bridge as MCP Streamable HTTP or using
-  `/mcp/stream`.
+  `/mcp/stream`, then includes lifecycle copy for started local source/bridge
+  processes with PIDs/log paths when available.
 - Bridge start uses the `cross-spawn` adapter directly for package commands,
   including Windows `.cmd` command names, without a hand-written `cmd.exe`
   wrapper.

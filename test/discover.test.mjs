@@ -492,6 +492,8 @@ test('quickstart can end after starting direct local source URLs without bridge 
             status: 'ready',
             selected: true,
             url: 'http://127.0.0.1:11001',
+            processId: 2222,
+            logs: { stdout: 'second-wiki.out.log', stderr: 'second-wiki.err.log' },
           }],
         }
       },
@@ -534,11 +536,15 @@ test('quickstart can end after starting direct local source URLs without bridge 
   assert(prompts.some((prompt) => /Set up llmwiki-agent-bridge as one endpoint for the selected source\(s\)\?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL\(s\)\.\n\[y\/N\]: $/.test(prompt)))
   assert.match(io.stdout.text, /\[choice\] Selected: Yes/)
   assert.match(io.stdout.text, /\[choice\] Selected: defaulted No/)
+  assert.match(io.stdout.text, /Selected source folder\(s\):\n  - second-wiki \[Obsidian vault\]\n    second-wiki/)
   assert.match(io.stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
   assert.match(io.stdout.text, /If you skip bridge setup, the direct MCP Streamable HTTP URL\(s\) printed below are ready to use\./)
   assert.match(io.stdout.text, /Coding-agent MCP registration URLs:/)
   assert.match(io.stdout.text, /These are MCP-over-HTTP\/Streamable HTTP server URLs; exact client configuration syntax varies by client\./)
   assert.match(io.stdout.text, /  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
+  assert.match(io.stdout.text, /Lifecycle note: started local process\(es\) remain running after quickstart exits\./)
+  assert.match(io.stdout.text, /Source second-wiki: PID 2222; logs: second-wiki\.out\.log, second-wiki\.err\.log/)
+  assert.match(io.stdout.text, /Safe next step: use the MCP registration URL\(s\) above/)
   assert.doesNotMatch(io.stdout.text, /source URL:/)
   assert.doesNotMatch(io.stdout.text, /health URL:/)
   assert.doesNotMatch(io.stdout.text, /manifest URL:/)
@@ -1082,6 +1088,47 @@ test('quickstart non-TTY text fallback fails invalid candidate input without rep
   assert.doesNotMatch(stdout.text, /Enter candidate ranks/)
 })
 
+test('quickstart candidate display adds parent context for repeated wiki basenames and llmwiki work paths', async () => {
+  const stdout = captureWritable()
+  const answers = ['y', 'q']
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-repeated-wiki-context-'))
+  const projectAWiki = join(root, 'project-a', 'wiki')
+  const projectBWiki = join(root, 'project-b', 'wiki')
+  const workWiki = join(root, 'project-c', '.llmwiki-work', 'sources', 'wiki')
+  const candidates = [
+    { rank: 1, path: projectAWiki, score: 80, confidence: 'high', markdownCount: 20, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+    { rank: 2, path: projectBWiki, score: 75, confidence: 'high', markdownCount: 18, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+    { rank: 3, path: workWiki, score: 65, confidence: 'high', markdownCount: 12, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+  ]
+
+  const result = await quickstart(
+    { path: '.', 'include-additional': true },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        return { roots: args.roots, count: candidates.length, minScore: args.minScore, candidates }
+      },
+    },
+  )
+
+  assert.deepEqual(result.skipped, ['start', 'bridge-setup', 'register', 'smoke'])
+  assert.match(stdout.text, /1\) wiki — project-a \[LLMWiki Markdown\]/)
+  assert.match(stdout.text, /2\) wiki — project-b \[LLMWiki Markdown\]/)
+  assert.match(stdout.text, /3\) wiki — project-c\/\.llmwiki-work\/sources \[LLMWiki Markdown\]/)
+  assert(stdout.text.includes(projectAWiki))
+  assert(stdout.text.includes(projectBWiki))
+  assert(stdout.text.includes(workWiki))
+})
+
 test('quickstart uses clack multiselect for TTY candidate selection', async (t) => {
   const previousNoColor = process.env.NO_COLOR
   process.env.NO_COLOR = '1'
@@ -1269,8 +1316,9 @@ test('quickstart generates bridge setup command without executing it and runs de
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', 'n', 'y']
   const prompts = []
+  const bridgeUrl = 'http://127.0.0.1:9911'
   const result = await quickstart(
-    { path: '.', bridge: 'http://127.0.0.1:8788', 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
+    { path: '.', bridge: bridgeUrl, 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
     {
       stdout,
       stderr: stdout,
@@ -1300,7 +1348,16 @@ test('quickstart generates bridge setup command without executing it and runs de
         calls.push(['start', args])
         return {
           configPath: args.configPath,
-          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+          sources: [{
+            id: 'first-wiki',
+            title: 'First Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+            processId: 5151,
+            logs: { stdout: 'first-wiki.out.log', stderr: 'first-wiki.err.log' },
+          }],
         }
       },
       async checkBridgeHealth(bridgeUrl) {
@@ -1351,11 +1408,96 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.runtimeSetup.model, 'local-model')
   assert.equal(result.runtimeSetup.profile, 'generic')
   assert.match(stdout.text, /llmwiki-agent-bridge is optional\. Add it when you want one A2A\/MCP-style endpoint/)
-  assert.match(stdout.text, /No llmwiki-agent-bridge is reachable at http:\/\/127\.0\.0\.1:8788 yet/)
-  assert.match(stdout.text, /Safe start command/)
+  assert.match(stdout.text, /No llmwiki-agent-bridge is reachable at http:\/\/127\.0\.0\.1:9911 yet/)
+  assert.match(stdout.text, /Safe manual start examples/)
   assert.match(stdout.text, /no global install/)
+  assert.match(stdout.text, /PowerShell:\n    \$env:LLMWIKI_AGENT_BRIDGE_HOST='127\.0\.0\.1'; \$env:LLMWIKI_AGENT_BRIDGE_PORT='9911'; \$env:LLMWIKI_AGENT_BRIDGE_BASE_URL='http:\/\/127\.0\.0\.1:8642\/v1'; \$env:LLMWIKI_AGENT_BRIDGE_MODEL='local-model'; \$env:LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE='generic'; npx --yes llmwiki-agent-bridge@0\.1\.0/)
+  assert.match(stdout.text, /POSIX sh\/bash\/zsh:\n    LLMWIKI_AGENT_BRIDGE_HOST='127\.0\.0\.1' LLMWIKI_AGENT_BRIDGE_PORT='9911' LLMWIKI_AGENT_BRIDGE_BASE_URL='http:\/\/127\.0\.0\.1:8642\/v1' LLMWIKI_AGENT_BRIDGE_MODEL='local-model' LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE='generic' npx --yes llmwiki-agent-bridge@0\.1\.0/)
+  assert.match(stdout.text, /LLMWIKI_AGENT_BRIDGE_HOST=127\.0\.0\.1/)
+  assert.match(stdout.text, /LLMWIKI_AGENT_BRIDGE_PORT=9911/)
   assert(prompts.some((prompt) => /Set up llmwiki-agent-bridge as one endpoint for the selected source\(s\)\?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL\(s\)\.\n\[y\/N\]: $/.test(prompt)))
-  assert(prompts.some((prompt) => /Start llmwiki-agent-bridge now in the background on http:\/\/127\.0\.0\.1:8788\?\nQuickstart will run the command above detached, write logs under .*\.llmwiki-bridge-start[\\/]logs, then wait for bridge health\.\n\[y\/N\]: $/.test(prompt)))
+  assert(prompts.some((prompt) => /Start llmwiki-agent-bridge now in the background on http:\/\/127\.0\.0\.1:9911\?\nQuickstart will run the same command with the env values above detached, write logs under .*\.llmwiki-bridge-start[\\/]logs, then wait for bridge health\.\n\[y\/N\]: $/.test(prompt)))
+})
+
+test('quickstart prints deferred bridge setup next steps when manual start is postponed', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', 'n', 'n']
+  const bridgeUrl = 'http://127.0.0.1:9912'
+
+  const result = await quickstart(
+    { path: '.', bridge: bridgeUrl, 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'first-wiki',
+            title: 'First Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+            processId: 5151,
+            logs: { stdout: 'first-wiki.out.log', stderr: 'first-wiki.err.log' },
+          }],
+        }
+      },
+      async checkBridgeHealth(url) {
+        calls.push(['bridge-health', url])
+        return { ok: false, error: 'connection refused', url }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        throw new Error('register should not run when deferred bridge setup is declined')
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        throw new Error('smoke should not run when deferred bridge setup is declined')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+  assert.equal(result.bridgeSetup.continueToBridge, false)
+  assert.match(stdout.text, /Bridge setup instructions generated\. Skipping registration and smoke until the bridge is running\./)
+  assert.match(stdout.text, /Bridge setup next steps:/)
+  assert.match(stdout.text, /llmwiki-bridge-start register --bridge http:\/\/127\.0\.0\.1:9912 --config .*sources\.json/)
+  assert.match(stdout.text, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9912 --mode evidence-only/)
+  assert.match(stdout.text, /Direct source MCP URL\(s\) remain usable meanwhile:\n  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
+  assert.match(stdout.text, /Lifecycle note: started local process\(es\) remain running after quickstart exits\./)
+  assert.match(stdout.text, /Source First Wiki: PID 5151; logs: first-wiki\.out\.log, first-wiki\.err\.log/)
+  assert.match(stdout.text, /Bridge http:\/\/127\.0\.0\.1:9912: already running or manually started; PID\/log path not captured by quickstart/)
+  assert.match(stdout.text, /Safe next step: start the bridge with a manual example above, then run the register\/smoke commands shown above\./)
 })
 
 test('quickstart registers started sources after starting bridge and passing health', async () => {
@@ -1393,7 +1535,16 @@ test('quickstart registers started sources after starting bridge and passing hea
         calls.push(['start', args])
         return {
           configPath: args.configPath,
-          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+          sources: [{
+            id: 'first-wiki',
+            title: 'First Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+            processId: 5151,
+            logs: { stdout: 'first-wiki.out.log', stderr: 'first-wiki.err.log' },
+          }],
         }
       },
       async checkBridgeHealth(bridgeUrl) {
@@ -1458,6 +1609,10 @@ test('quickstart registers started sources after starting bridge and passing hea
   assert.equal(calls.find((call) => call[0] === 'register')[1].configPath, result.started.configPath)
   assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
   assert.match(stdout.text, /Registered 5 total bridge source\(s\); 1 selected for this quickstart\. Register merges by default unless --replace is set\./)
+  assert.match(stdout.text, /Lifecycle note: started local process\(es\) remain running after quickstart exits\./)
+  assert.match(stdout.text, /Source First Wiki: PID 5151; logs: first-wiki\.out\.log, first-wiki\.err\.log/)
+  assert.match(stdout.text, /Bridge http:\/\/127\.0\.0\.1:8788: PID 4242; logs: bridge\.out\.log, bridge\.err\.log/)
+  assert.match(stdout.text, /Safe next step: connect your agent or script to the bridge endpoint above\./)
   assert.deepEqual(result.skipped, [])
 })
 
@@ -1530,17 +1685,29 @@ test('quickstart prints final bridge handoff after successful smoke', async () =
   assert.doesNotMatch(handoff, /mcp\/stream/)
 })
 
-test('quickstart applies Hermes runtime settings to an already running bridge', async () => {
+test('quickstart applies Hermes runtime settings to an already running bridge', async (t) => {
+  const previousHermesBaseUrl = process.env.HERMES_BASE_URL
+  t.after(() => {
+    if (previousHermesBaseUrl === undefined) {
+      delete process.env.HERMES_BASE_URL
+    } else {
+      process.env.HERMES_BASE_URL = previousHermesBaseUrl
+    }
+  })
+  process.env.HERMES_BASE_URL = 'http://127.0.0.1:8642/v1'
+
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:8642/v1', '']
+  const answers = ['y', '1', 'y', 'y', '2', '', '']
+  const prompts = []
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
     {
       stdout,
       stderr: stdout,
-      async prompt() {
+      async prompt(question) {
+        prompts.push(question)
         return answers.shift()
       },
     },
@@ -1610,19 +1777,22 @@ test('quickstart applies Hermes runtime settings to an already running bridge', 
   assert.match(stdout.text, /Registered 1 total bridge source\(s\); 1 selected for this quickstart/)
   assert.match(stdout.text, /No repo-confirmed auto-install command for Hermes was found/)
   assert.match(stdout.text, /Applying runtime settings to the running bridge/)
+  assert(prompts.some((prompt) => /Hermes runtime base URL \(OpenAI-compatible; press Enter to use http:\/\/127\.0\.0\.1:8642\/v1, or type skip for evidence-only\)/.test(prompt)))
 })
 
 test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-install', async () => {
   const calls = []
   const stdout = captureWritable()
-  const answers = ['y', '1', 'y', 'y', '3', '', 'n', 'n']
+  const answers = ['y', '1', 'y', 'y', '3', 'skip', 'n', 'n']
+  const prompts = []
 
   const result = await quickstart(
     { path: '.', bridge: 'http://127.0.0.1:8788' },
     {
       stdout,
       stderr: stdout,
-      async prompt() {
+      async prompt(question) {
+        prompts.push(question)
         return answers.shift()
       },
     },
@@ -1687,6 +1857,7 @@ test('quickstart guides Hermes and DeepAgents runtime setup without unsafe auto-
   assert.match(stdout.text, /No repo-confirmed auto-install command for DeepAgents was found/)
   assert.match(stdout.text, /--runtime-profile deepagents/)
   assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
+  assert(prompts.some((prompt) => /DeepAgents runtime base URL \(OpenAI-compatible, e\.g\. http:\/\/127\.0\.0\.1:8642\/v1; press Enter or type skip to continue evidence-only\)/.test(prompt)))
 })
 
 test('startBridgeCommand delegates Windows .cmd bridge commands directly to cross-platform spawn adapter', () => {

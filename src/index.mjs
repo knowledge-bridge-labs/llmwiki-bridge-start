@@ -480,6 +480,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
+    output.write(formatSelectedSourceEcho(selected, candidatePlan.visibleCandidates))
 
     writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
     if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback?\nThis validates each selected folder first.`, true)) {
@@ -524,6 +525,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     if (!await confirmQuickstart(prompter, `Set up llmwiki-agent-bridge as one endpoint for the selected source(s)?\nChoose yes to register these sources with a bridge or start one; choose no to finish with direct MCP URL(s).`, boolOption(options.setupBridge ?? options['setup-bridge']))) {
       writeStatus(output, ui, 'skip', 'Skipped bridge setup. Quickstart complete with direct local source endpoint(s).')
       output.write(formatCodingAgentRegistrationHandoff(result.started.sources))
+      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, mode: 'direct' }))
       result.skipped.push('bridge-setup', 'register', 'smoke')
       return result
     }
@@ -551,6 +553,8 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
 
     if (result.bridgeSetup.continueToBridge === false) {
       writeStatus(output, ui, 'skip', 'Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.')
+      output.write(formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources: result.started.sources }))
+      output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'deferred-bridge' }))
       result.skipped.push('register', 'smoke')
       return result
     }
@@ -577,6 +581,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     writeStatus(output, ui, 'ok', `Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}`)
     output.write(formatBridgeHandoff(bridgeUrl))
+    output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'bridge' }))
     return result
   } finally {
     prompter.close()
@@ -787,7 +792,7 @@ function formatRuntimeEndpointPrompt(choice, endpointDefault) {
   if (endpointDefault) {
     return `[?] ${choice.label} runtime base URL (OpenAI-compatible; press Enter to use ${endpointDefault}, or type skip for evidence-only)`
   }
-  return `[?] ${choice.label} runtime base URL (OpenAI-compatible, e.g. ${DEFAULT_BRIDGE_RUNTIME_BASE_URL}; press Enter to continue evidence-only)`
+  return `[?] ${choice.label} runtime base URL (OpenAI-compatible, e.g. ${DEFAULT_BRIDGE_RUNTIME_BASE_URL}; press Enter or type skip to continue evidence-only)`
 }
 
 async function promptRuntimeEndpoint(prompter, question, fallback = '') {
@@ -931,17 +936,18 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
 
   const plan = runtime.bridgeStartPlan(options)
   const commandText = formatCommand(plan)
+  const manualStartText = formatBridgeManualStartExamples(plan, { bridgeUrl, runtime: runtimeInfo })
   const result = {
     bridgeUrl,
     command: plan,
     commandText,
+    manualStartText,
     executed: false,
     continueToBridge: true,
   }
 
   writeStatus(output, ui, 'info', `No llmwiki-agent-bridge is reachable at ${bridgeUrl} yet. Quickstart can start one as a detached background process, or you can start it yourself in another terminal.`)
-  output.write('Safe start command (no global install; npx uses the package cache, or a local checkout is used when available):\n')
-  output.write(`  ${commandText}\n`)
+  output.write(manualStartText)
 
   if (runtimeInfo.configured) {
     writeStatus(output, ui, 'info', 'An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.')
@@ -949,7 +955,7 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
     writeStatus(output, ui, 'info', 'No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.')
   }
 
-  if (await confirmQuickstart(prompter, `Start llmwiki-agent-bridge now in the background on ${bridgeUrl}?\nQuickstart will run the command above detached, write logs under ${logDir}, then wait for bridge health.`, false)) {
+  if (await confirmQuickstart(prompter, `Start llmwiki-agent-bridge now in the background on ${bridgeUrl}?\nQuickstart will run the same command with the env values above detached, write logs under ${logDir}, then wait for bridge health.`, false)) {
     const started = await runtime.startBridgeCommand(plan, { bridgeUrl, logDir, runtime: runtimeInfo })
     Object.assign(result, { executed: true }, started)
     writeStatus(output, ui, 'run', `Started bridge process ${started.processId || 'unknown'}. Logs: ${started.logs?.stdout || 'stdout n/a'}, ${started.logs?.stderr || 'stderr n/a'}`)
@@ -965,9 +971,35 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
     return result
   }
 
-  writeStatus(output, ui, 'info', `If the bridge is not already running at ${bridgeUrl}, start the command above in another terminal first.`)
+  writeStatus(output, ui, 'info', `If the bridge is not already running at ${bridgeUrl}, start one of the manual examples above in another terminal first.`)
   result.continueToBridge = await confirmQuickstart(prompter, `Continue with registration/smoke against ${bridgeUrl} now?\nChoose yes only if the bridge is already running or will become healthy during the check.`, false)
   return result
+}
+
+function formatBridgeManualStartExamples(plan, { bridgeUrl = DEFAULT_BRIDGE_URL, runtime = detectLlmRuntime({}) } = {}) {
+  const parsed = new URL(bridgeUrl)
+  const envEntries = Object.entries(bridgeStartEnvOverrides(parsed, runtime))
+  const powershellEnv = envEntries.map(([key, value]) => `$env:${key}=${quotePowerShellEnvValue(value)}`).join('; ')
+  const posixEnv = envEntries.map(([key, value]) => `${key}=${quotePosixEnvValue(value)}`).join(' ')
+  return [
+    formatBridgeManualStartHeader(plan),
+    '  PowerShell:',
+    `    ${[powershellEnv, formatPowershellCommand(plan)].filter(Boolean).join('; ')}`,
+    '  POSIX sh/bash/zsh:',
+    `    ${[posixEnv, formatPosixCommand(plan)].filter(Boolean).join(' ')}`,
+    '  Env values used by quickstart/background start:',
+    ...envEntries.map(([key, value]) => `    - ${key}=${value}`),
+  ].join('\n') + '\n'
+}
+
+function formatBridgeManualStartHeader(plan = {}) {
+  if (plan.source === 'npx-package' || plan.packageName) {
+    return 'Safe manual start examples (copy the one for your shell; no global install, npx uses the package cache):'
+  }
+  if (plan.source === 'sibling-checkout') {
+    return 'Safe manual start examples (copy the one for your shell; using the detected local bridge checkout):'
+  }
+  return 'Safe manual start examples (copy the one for your shell; env values match the requested bridge URL):'
 }
 
 async function maybeConfigureBridgeRuntime({ runtime, output, ui, prompter, bridgeUrl, runtimeInfo }) {
@@ -1121,6 +1153,38 @@ export function formatCommand(plan) {
     .join(' ')
 }
 
+function formatPowershellCommand(plan) {
+  return [plan.command, ...(plan.args || [])].map(quotePowerShellValue).join(' ')
+}
+
+function formatPosixCommand(plan) {
+  return [plan.command, ...(plan.args || [])].map(quotePosixValue).join(' ')
+}
+
+function quotePowerShellValue(value) {
+  const text = String(value ?? '')
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) {
+    return text
+  }
+  return `'${text.replaceAll("'", "''")}'`
+}
+
+function quotePosixValue(value) {
+  const text = String(value ?? '')
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) {
+    return text
+  }
+  return `'${text.replaceAll("'", "'\"'\"'")}'`
+}
+
+function quotePowerShellEnvValue(value) {
+  return `'${String(value ?? '').replaceAll("'", "''")}'`
+}
+
+function quotePosixEnvValue(value) {
+  return `'${String(value ?? '').replaceAll("'", "'\"'\"'")}'`
+}
+
 function formatBridgeModeLabel(mode) {
   if (mode === BRIDGE_MODE_DELEGATED_RUNTIME) {
     return 'A2A delegated-runtime'
@@ -1169,6 +1233,18 @@ function sourceDisplayName(source = {}) {
   return source.title || source.name || source.id || source.url || 'source'
 }
 
+function formatSelectedSourceEcho(selected = [], candidateContext = selected) {
+  if (!selected.length) {
+    return ''
+  }
+  const rows = selected.map((candidate) => {
+    const label = candidateDisplayTitle(candidate, candidateContext)
+    const variant = candidateVariantLabel(candidate)
+    return `  - ${label} [${variant}]\n    ${candidate.path}`
+  })
+  return ['Selected source folder(s):', ...rows].join('\n') + '\n'
+}
+
 function formatCodingAgentRegistrationHandoff(sources = []) {
   const mcpUrls = sources.map((source) => sourceMcpStreamUrl(source.url)).filter(Boolean)
   if (!mcpUrls.length) {
@@ -1179,6 +1255,69 @@ function formatCodingAgentRegistrationHandoff(sources = []) {
     'These are MCP-over-HTTP/Streamable HTTP server URLs; exact client configuration syntax varies by client.',
     ...mcpUrls.map((url) => `  - ${url}`),
   ].join('\n') + '\n'
+}
+
+function formatLocalProcessLifecycleNote({ sources = [], bridgeSetup = null, mode = 'direct' } = {}) {
+  const rows = []
+  for (const source of sources) {
+    rows.push(`  - Source ${sourceDisplayName(source)}: ${formatProcessDetail(source)}`)
+  }
+  if (bridgeSetup) {
+    const bridgeDetail = bridgeSetup.executed
+      ? formatProcessDetail(bridgeSetup)
+      : 'already running or manually started; PID/log path not captured by quickstart'
+    rows.push(`  - Bridge ${bridgeSetup.bridgeUrl || ''}: ${bridgeDetail}`.trimEnd())
+  }
+  if (!rows.length) {
+    return ''
+  }
+  const nextStep = mode === 'bridge'
+    ? 'Safe next step: connect your agent or script to the bridge endpoint above.'
+    : mode === 'deferred-bridge'
+      ? 'Safe next step: start the bridge with a manual example above, then run the register/smoke commands shown above.'
+    : 'Safe next step: use the MCP registration URL(s) above, or rerun with --setup-bridge when you want one bridge endpoint.'
+  return [
+    'Lifecycle note: started local process(es) remain running after quickstart exits.',
+    ...rows,
+    nextStep,
+    'To stop later, stop only the exact PID(s) shown with your OS process manager, or stop the terminal/process you started manually.',
+  ].join('\n') + '\n'
+}
+
+function formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources = [] } = {}) {
+  const lines = [
+    'Bridge setup next steps:',
+    '  1) Start llmwiki-agent-bridge with one of the manual examples above.',
+    '  2) After it is reachable, register the started source config and smoke test:',
+    `     llmwiki-bridge-start register --bridge ${bridgeUrl} --config ${configPath}`,
+    `     llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode evidence-only`,
+  ]
+  const mcpUrls = sources.map((source) => sourceMcpStreamUrl(source.url)).filter(Boolean)
+  if (mcpUrls.length) {
+    lines.push('Direct source MCP URL(s) remain usable meanwhile:')
+    lines.push(...mcpUrls.map((url) => `  - ${url}`))
+  }
+  return lines.join('\n') + '\n'
+}
+
+function formatProcessDetail(processInfo = {}) {
+  const parts = []
+  if (processInfo.processId) {
+    parts.push(`PID ${processInfo.processId}`)
+  }
+  if (processInfo.runnerProcessId) {
+    parts.push(`runner PID ${processInfo.runnerProcessId}`)
+  }
+  const logs = formatProcessLogs(processInfo.logs)
+  if (logs) {
+    parts.push(`logs: ${logs}`)
+  }
+  return parts.length ? parts.join('; ') : 'PID/log path not available'
+}
+
+function formatProcessLogs(logs = {}) {
+  const paths = [logs.stdout, logs.stderr].filter(Boolean)
+  return paths.join(', ')
 }
 
 function sourceMcpStreamUrl(sourceUrl) {
@@ -1395,7 +1534,7 @@ function formatQuickstartSelectAllLine(hasVisibleAdvancedCandidates) {
 function formatQuickstartCandidateRows(candidates) {
   const rows = candidates.map((candidate, index) => {
     const rank = candidate.rank || index + 1
-    const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const title = candidateDisplayTitle(candidate, candidates)
     const variant = candidateVariantLabel(candidate)
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
@@ -1415,6 +1554,38 @@ function candidateVariantLabel(candidate = {}) {
     return adapterVariant ? VARIANT_LABELS[adapterVariant] : `${candidate.manifest.adapter} source`
   }
   return VARIANT_LABELS[candidateVariant(candidate)] || VARIANT_LABELS[VARIANT_GENERIC_MARKDOWN]
+}
+
+function candidateDisplayTitle(candidate = {}, candidates = []) {
+  const rawTitle = candidate.manifest?.title || basename(candidate.path)
+  const context = candidateDisplayContext(candidate, candidates)
+  return compactText(context ? `${rawTitle} — ${context}` : rawTitle, 64)
+}
+
+function candidateDisplayContext(candidate = {}, candidates = []) {
+  const candidatePath = String(candidate.path || '')
+  if (!candidatePath) {
+    return ''
+  }
+  const base = basename(candidatePath).toLowerCase()
+  const repeatsBase = candidates.filter((entry) => basename(String(entry.path || '')).toLowerCase() === base).length > 1
+  const hasWorkPath = normalizePath(candidatePath).split(sep).includes('.llmwiki-work')
+  if (!repeatsBase && !hasWorkPath) {
+    return ''
+  }
+  return candidateParentContext(candidatePath)
+}
+
+function candidateParentContext(candidatePath = '') {
+  const parts = normalizePath(candidatePath).split(sep).filter(Boolean)
+  if (parts.length < 2) {
+    return ''
+  }
+  const workIndex = parts.lastIndexOf('.llmwiki-work')
+  if (workIndex > 0) {
+    return [parts[workIndex - 1], parts[workIndex], parts[workIndex + 1]].filter(Boolean).join('/')
+  }
+  return parts.at(-2) || ''
 }
 
 function candidateVariant(candidate = {}) {
@@ -1713,7 +1884,7 @@ async function selectCandidatesWithClack(candidates, { clackPrompts, input, outp
 function formatCandidateMultiselectOptions(candidates) {
   return candidates.map((candidate, index) => {
     const rank = candidateRank(candidate, index)
-    const title = compactText(candidate.manifest?.title || basename(candidate.path), 48)
+    const title = candidateDisplayTitle(candidate, candidates)
     const variant = candidateVariantLabel(candidate)
     const pageText = candidate.manifest
       ? `${candidate.manifest.approved_page_count}/${candidate.manifest.page_count} approved`
@@ -3324,6 +3495,12 @@ function bridgeStartEnv(parsedBridgeUrl, runtime = detectLlmRuntime({}), baseEnv
   }
   return {
     ...env,
+    ...bridgeStartEnvOverrides(parsedBridgeUrl, runtime),
+  }
+}
+
+function bridgeStartEnvOverrides(parsedBridgeUrl, runtime = detectLlmRuntime({})) {
+  return {
     LLMWIKI_AGENT_BRIDGE_HOST: parsedBridgeUrl.hostname,
     LLMWIKI_AGENT_BRIDGE_PORT: parsedBridgeUrl.port || (parsedBridgeUrl.protocol === 'https:' ? '443' : '80'),
     ...(runtime.configured
