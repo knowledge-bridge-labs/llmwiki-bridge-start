@@ -147,6 +147,23 @@
 - Existing running bridge runtime setup applies safe endpoint/model/profile
   fields through `/settings/config.json` before delegated-runtime smoke, and
   avoids sending API keys or bearer tokens.
+- Existing running bridge runtime setup includes
+  `runtimeAdapter: "deepagents-acp"` in `/settings/config.json` when
+  `--runtime-adapter deepagents-acp` is selected, and omits that field for the
+  existing DeepAgents endpoint-based compatibility path unless the adapter is
+  explicit.
+- Background bridge startup includes
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp` when the DeepAgents ACP
+  adapter is explicit, while DeepAgents endpoint-based compatibility startup
+  does not set ACP by profile alone.
+- Inherited parent-shell bridge adapter variables such as
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER` do not enable ACP detection or leak
+  into background bridge startup when the explicit adapter flag was not used.
+- Explicit DeepAgents ACP runtime setup keeps the runtime profile fixed to
+  `deepagents` even if the parent shell has inherited model/profile bridge env.
+- Deferred manual bridge startup prints `smoke --mode delegated-runtime` when
+  runtime setup selected an explicit endpoint or adapter, and
+  `smoke --mode evidence-only` when runtime setup was skipped.
 - Hermes and DeepAgents runtime setup prints first-class profile guidance. When
   an official-doc-backed install plan exists and the CLI is missing, interactive
   QuickStart displays the official command and runs the installer only after

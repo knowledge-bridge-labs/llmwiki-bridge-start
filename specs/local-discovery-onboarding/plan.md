@@ -40,6 +40,11 @@
      endpoints, using the matching fixed runtime profile.
    - Keep explicit `--llm-endpoint` support as a preconfigured compatibility
      path, not as an interactive QuickStart menu choice.
+   - Keep DeepAgents ACP as an explicit adapter path selected with
+     `--runtime-adapter deepagents-acp`. When selected, pass
+     `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp` to background bridge
+     starts and `runtimeAdapter: "deepagents-acp"` to a running bridge settings
+     update. Do not infer ACP from the DeepAgents profile alone.
    - Treat Hermes and DeepAgents as bridge runtime profiles. Offer runtime CLI
      auto-install only through a fixed allowlist backed by official runtime
      docs, show the official command, require explicit approval, download the
@@ -50,7 +55,8 @@
      endpoint after the runtime is running.
    - Feed the runtime setup result into runtime detection, bridge start env, and
      smoke mode selection. If the endpoint is skipped or blank, force the
-     evidence-only bridge path for this quickstart run.
+     evidence-only bridge path for this quickstart run unless the user
+     explicitly selected the DeepAgents ACP adapter path.
 10. Start `llmwiki-agent-bridge` with `cross-spawn` so package command
     resolution works cross-platform without a hand-written Windows `cmd.exe`
     wrapper.
@@ -119,6 +125,11 @@
 - Quickstart docs must state that endpoint, model, and profile feed
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE` for a started bridge.
+- Quickstart docs must state that `--runtime-adapter deepagents-acp` is the
+  opt-in DeepAgents ACP path. It feeds
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp` for background bridge
+  starts and `runtimeAdapter: "deepagents-acp"` for running bridge settings.
+  DeepAgents without that adapter remains endpoint-input/evidence-only.
 - Quickstart docs must state that Hermes/DeepAgents runtime CLI auto-install is
   allowed only from the official-doc-backed allowlist and only after explicit
   approval. Docs must also state that installer logs are written under

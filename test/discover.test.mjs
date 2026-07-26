@@ -32,6 +32,12 @@ test('parseArgs supports runtime install approval flags', () => {
   assert.equal(decline.options['install-runtime'], false)
 })
 
+test('parseArgs accepts explicit runtime adapter option', () => {
+  const parsed = parseArgs(['quickstart', '--runtime-adapter', 'deepagents-acp'])
+  assert.equal(parsed.command, 'quickstart')
+  assert.equal(parsed.options['runtime-adapter'], 'deepagents-acp')
+})
+
 test('runCli starts quickstart when no subcommand is provided', async () => {
   const stdout = captureWritable()
   const prompts = []
@@ -735,6 +741,7 @@ test('quickstart can end after starting direct local source URLs without bridge 
   const stdout = captureWritable()
   const answers = ['y', '2x', '2', 'y', '']
   const prompts = []
+  const configPath = join(mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-direct-')), '.llmwiki-bridge-start', 'sources.json')
   const io = {
     stdout,
     stderr: stdout,
@@ -749,7 +756,7 @@ test('quickstart can end after starting direct local source URLs without bridge 
   ]
 
   const result = await quickstart(
-    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true },
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'include-additional': true, config: configPath },
     io,
     {
       resolveServeInvocation() {
@@ -1937,14 +1944,15 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert(prompts.some((prompt) => /Start llmwiki-agent-bridge now in the background on http:\/\/127\.0\.0\.1:9911\?\nQuickstart will run the same command with the env values above detached, write logs under .*\.llmwiki-bridge-start[\\/]logs, then wait for bridge health\.\n\[y\/N\]: $/.test(prompt)))
 })
 
-test('quickstart prints deferred bridge setup next steps when manual start is postponed', async () => {
+test('quickstart prints delegated deferred bridge setup next steps when runtime is configured', async () => {
   const calls = []
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', 'n', 'n']
   const bridgeUrl = 'http://127.0.0.1:9912'
+  const configPath = join(mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-deferred-')), '.llmwiki-bridge-start', 'sources.json')
 
   const result = await quickstart(
-    { path: '.', bridge: bridgeUrl, 'llm-endpoint': 'http://127.0.0.1:8642/v1' },
+    { path: '.', bridge: bridgeUrl, 'llm-endpoint': 'http://127.0.0.1:8642/v1', config: configPath },
     {
       stdout,
       stderr: stdout,
@@ -2010,7 +2018,8 @@ test('quickstart prints deferred bridge setup next steps when manual start is po
   assert.match(stdout.text, /Bridge setup instructions generated\. Skipping registration and smoke until the bridge is running\./)
   assert.match(stdout.text, /Bridge setup next steps:/)
   assert.match(stdout.text, /llmwiki-bridge-start register --bridge http:\/\/127\.0\.0\.1:9912 --config .*sources\.json/)
-  assert.match(stdout.text, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9912 --mode evidence-only/)
+  assert.equal(result.smokeMode, 'delegated-runtime')
+  assert.match(stdout.text, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9912 --mode delegated-runtime/)
   assert.match(stdout.text, /Direct source MCP URL\(s\) remain usable meanwhile:\n  - http:\/\/127\.0\.0\.1:11001\/mcp\/stream/)
   assert.match(stdout.text, /Operational details\n/)
   assert.match(stdout.text, /Started source servers\s+1/)
@@ -2025,16 +2034,97 @@ test('quickstart prints deferred bridge setup next steps when manual start is po
   assert.match(deferredDetails, /### First Wiki/)
   assert.match(deferredDetails, /PID 5151/)
   assert.match(deferredDetails, /first-wiki\.out\.log/)
+  assert.match(deferredDetails, /Smoke mode: delegated-runtime/)
+  assert.match(deferredDetails, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9912 --mode delegated-runtime/)
   assert.match(deferredDetails, /already running or manually started; PID\/log path not captured by quickstart/)
+})
+
+test('quickstart keeps deferred bridge smoke next steps evidence-only when runtime is skipped', async () => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y', '1', 'n', 'n']
+  const bridgeUrl = 'http://127.0.0.1:9913'
+  const configPath = join(mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-deferred-skip-')), '.llmwiki-bridge-start', 'sources.json')
+
+  const result = await quickstart(
+    { path: '.', bridge: bridgeUrl, config: configPath },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt() {
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{
+            id: 'first-wiki',
+            title: 'First Wiki',
+            protocol: 'llmwiki-http',
+            status: 'ready',
+            selected: true,
+            url: 'http://127.0.0.1:11001',
+            processId: 5152,
+            logs: { stdout: 'first-wiki.out.log', stderr: 'first-wiki.err.log' },
+          }],
+        }
+      },
+      async checkBridgeHealth(url) {
+        calls.push(['bridge-health', url])
+        return { ok: false, error: 'connection refused', url }
+      },
+      bridgeStartPlan(args) {
+        calls.push(['bridge-plan', args])
+        return { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], packageName: 'llmwiki-agent-bridge@0.1.0' }
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        throw new Error('register should not run when deferred bridge setup is declined')
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        throw new Error('smoke should not run when deferred bridge setup is declined')
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(result.skipped, ['register', 'smoke'])
+  assert.equal(result.smokeMode, 'evidence-only')
+  assert.match(stdout.text, /Runtime setup: skip\/evidence-only/)
+  assert.match(stdout.text, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9913 --mode evidence-only/)
+  const deferredDetails = readFileSync(result.runSummary.path, 'utf8')
+  assert.match(deferredDetails, /Smoke mode: evidence-only/)
+  assert.match(deferredDetails, /llmwiki-bridge-start smoke --bridge http:\/\/127\.0\.0\.1:9913 --mode evidence-only/)
 })
 
 test('quickstart registers started sources after starting bridge and passing health', async () => {
   const calls = []
   const stdout = captureWritable()
   const answers = ['y', '1', 'y', 'y', '2', 'http://127.0.0.1:9999/v1', 'demo-model', 'y']
+  const configPath = join(mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-bridge-')), '.llmwiki-bridge-start', 'sources.json')
 
   const result = await quickstart(
-    { path: '.', bridge: 'http://127.0.0.1:8788' },
+    { path: '.', bridge: 'http://127.0.0.1:8788', config: configPath },
     {
       stdout,
       stderr: stdout,
@@ -2523,6 +2613,141 @@ test('quickstart guides DeepAgents runtime setup without endpoint inference when
   assert.match(stdout.text, /No runtime endpoint entered\. Continuing with evidence-only bridge mode/)
   assert.doesNotMatch(stdout.text, /Start DeepAgents so it exposes an OpenAI-compatible endpoint/)
   assert(prompts.some((prompt) => /Optional bridge runtime base URL \(OpenAI-compatible; DeepAgents is checked via dcode, but no DeepAgents endpoint is inferred; press Enter or type skip to continue evidence-only\)/.test(prompt)))
+})
+
+test('quickstart applies explicit DeepAgents ACP adapter to an already running bridge without endpoint prompt', async (t) => {
+  const calls = []
+  const stdout = captureWritable()
+  const answers = ['y', '1', 'y', 'y']
+  const prompts = []
+  const inheritedRuntimeEnv = [
+    'LLMWIKI_AGENT_BRIDGE_MODEL',
+    'LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE',
+  ]
+  const previousRuntimeEnv = new Map(inheritedRuntimeEnv.map((key) => [key, process.env[key]]))
+  t.after(() => {
+    for (const [key, value] of previousRuntimeEnv) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  })
+  process.env.LLMWIKI_AGENT_BRIDGE_MODEL = 'parent-shell-model'
+  process.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE = 'generic'
+
+  const result = await quickstart(
+    { path: '.', bridge: 'http://127.0.0.1:8788', 'runtime-adapter': 'deepagents-acp', 'runtime-profile': 'generic', 'llm-model': 'cli-deepagents-model' },
+    {
+      stdout,
+      stderr: stdout,
+      async prompt(question) {
+        prompts.push(question)
+        return answers.shift()
+      },
+    },
+    {
+      resolveServeInvocation() {
+        return { command: 'mock-serve', baseArgs: [], cwd: process.cwd() }
+      },
+      async discoverCandidates(args) {
+        calls.push(['discover', args])
+        return {
+          roots: args.roots,
+          count: 1,
+          minScore: args.minScore,
+          candidates: [{ rank: 1, path: 'first-wiki', score: 80, confidence: 'high', markdownCount: 20, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] }],
+        }
+      },
+      async validateCandidate(candidate) {
+        calls.push(['validate', candidate.path])
+        return { ...candidate, startable: true, manifest: { title: 'First Wiki', source_id: 'first-wiki', page_count: 3, approved_page_count: 3 } }
+      },
+      async startSources(args) {
+        calls.push(['start', args])
+        return {
+          configPath: args.configPath,
+          sources: [{ id: 'first-wiki', title: 'First Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: 'http://127.0.0.1:11001' }],
+        }
+      },
+      runtimeInstallPlan(choice) {
+        calls.push(['install-plan', choice.id])
+        return {
+          runtime: 'deepagents',
+          autoInstallAvailable: false,
+          command: null,
+          args: [],
+          reason: 'test fixture does not install',
+        }
+      },
+      async inspectRuntimeFramework(args) {
+        calls.push(['framework', args.choice.id])
+        return {
+          framework: 'deepagents',
+          supported: true,
+          installed: true,
+          version: '2.0.0',
+          installCheck: { displayCommand: 'dcode --version' },
+          checks: [{ name: 'version', displayCommand: 'dcode --version', ok: true }],
+          runtime: {
+            ok: false,
+            skipped: true,
+            reason: 'DeepAgents Code has supported CLI diagnostics, but no registered local OpenAI-compatible runtime endpoint discovery contract in quickstart.',
+          },
+          endpointDefault: { value: '', source: '' },
+        }
+      },
+      async checkBridgeHealth(bridgeUrl) {
+        calls.push(['bridge-health', bridgeUrl])
+        return { ok: true, status: 'ok', url: bridgeUrl }
+      },
+      async configureBridgeRuntime(args) {
+        calls.push(['configure-runtime', args])
+        return { ok: true, skipped: false, response: { status: 'saved', applied: ['runtimeProfile', 'runtimeAdapter', 'model'] } }
+      },
+      async registerSources(args) {
+        calls.push(['register', args])
+        return {
+          bridgeUrl: args.bridgeUrl,
+          replace: args.replace,
+          response: { ok: true },
+        }
+      },
+      async selectBridgeSmokeMode(args) {
+        calls.push(['smoke-mode', args])
+        assert.equal(args.options.runtimeAdapter, 'deepagents-acp')
+        return { mode: 'delegated-runtime', reason: 'explicit runtime adapter configured (deepagents-acp)' }
+      },
+      async smokeBridge(args) {
+        calls.push(['smoke', args])
+        return { bridgeUrl: args.bridgeUrl, mode: args.mode, status: { state: 'completed' }, text: '' }
+      },
+    },
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'install-plan', 'framework', 'bridge-health', 'configure-runtime', 'register', 'smoke-mode', 'smoke'])
+  assert.equal(result.runtimeSetup.choice, 'deepagents')
+  assert.equal(result.runtimeSetup.configured, true)
+  assert.equal(result.runtimeSetup.profile, 'deepagents')
+  assert.equal(result.runtimeSetup.model, 'cli-deepagents-model')
+  assert.equal(result.runtimeSetup.runtimeAdapter, 'deepagents-acp')
+  assert.equal(result.runtimeSetup.baseUrl, '')
+  assert.equal(result.runtimeSetup.runtimeOptions.runtimeProfile, 'deepagents')
+  assert.equal(result.runtimeSetup.runtimeOptions.llmModel, 'cli-deepagents-model')
+  assert.equal(result.bridgeSetup.runtimeConfiguration.ok, true)
+  const runtime = calls.find((call) => call[0] === 'configure-runtime')[1].runtime
+  assert.equal(runtime.profile, 'deepagents')
+  assert.equal(runtime.model, 'cli-deepagents-model')
+  assert.equal(runtime.runtimeAdapter, 'deepagents-acp')
+  assert.equal(runtime.baseUrl, '')
+  const smokeModeOptions = calls.find((call) => call[0] === 'smoke-mode')[1].options
+  assert.equal(smokeModeOptions.runtimeProfile, 'deepagents')
+  assert.equal(smokeModeOptions.llmModel, 'cli-deepagents-model')
+  assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
+  assert.match(stdout.text, /Using runtime setup from explicit --runtime-adapter deepagents-acp: DeepAgents/)
+  assert.match(stdout.text, /DeepAgents ACP adapter selected explicitly/)
+  assert.doesNotMatch(prompts.join('\n'), /runtime base URL/)
 })
 
 test('quickstart installs a missing Hermes CLI only after explicit approval and rechecks before endpoint setup', async () => {
@@ -3226,6 +3451,7 @@ test('startBridgeCommand delegates Windows .cmd bridge commands directly to cros
   assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_BASE_URL, 'http://127.0.0.1:9999/v1')
   assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_MODEL, 'deepagents-local')
   assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE, 'deepagents')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER, undefined)
   assert.equal(spawnCall.options.stdio[0], 'ignore')
   assert(Number.isInteger(spawnCall.options.stdio[1]))
   assert(Number.isInteger(spawnCall.options.stdio[2]))
@@ -3237,6 +3463,96 @@ test('startBridgeCommand delegates Windows .cmd bridge commands directly to cros
   assert.match(started.logs.stderr, /llmwiki-agent-bridge-127\.0\.0\.1-8788\.err\.log$/)
 })
 
+test('startBridgeCommand passes explicit DeepAgents ACP runtime adapter env', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-bridge-start-acp-env-'))
+  const calls = []
+  const child = {
+    pid: 4244,
+    unref() {
+      calls.push({ type: 'unref' })
+    },
+  }
+
+  startBridgeCommand(
+    { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], source: 'npx-package' },
+    {
+      bridgeUrl: 'http://127.0.0.1:8788',
+      logDir,
+      runtime: { configured: true, baseUrl: '', model: 'deepagents-local', profile: 'deepagents', runtimeAdapter: 'deepagents-acp' },
+      spawnProcess(command, args, options) {
+        calls.push({ type: 'spawn', command, args, options })
+        return child
+      },
+    },
+  )
+
+  const spawnCall = calls.find((call) => call.type === 'spawn')
+  assert(spawnCall)
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_HOST, '127.0.0.1')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_PORT, '8788')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_BASE_URL, undefined)
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_MODEL, 'deepagents-local')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE, 'deepagents')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER, 'deepagents-acp')
+  assert.deepEqual(calls.at(-1), { type: 'unref' })
+})
+
+test('startBridgeCommand scrubs inherited adapter env before applying configured runtime env', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-bridge-start-configured-env-'))
+  const scrubbedKeys = [
+    'LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_COMMAND',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_ARGS',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_CWD',
+    'HERMES_A2A_BRIDGE_RUNTIME_ADAPTER',
+  ]
+  const previous = new Map(scrubbedKeys.map((key) => [key, process.env[key]]))
+  const calls = []
+  const child = {
+    pid: 4245,
+    unref() {
+      calls.push({ type: 'unref' })
+    },
+  }
+
+  try {
+    for (const key of scrubbedKeys) {
+      process.env[key] = `canary-${key}`
+    }
+
+    startBridgeCommand(
+      { command: 'npx', args: ['--yes', 'llmwiki-agent-bridge@0.1.0'], source: 'npx-package' },
+      {
+        bridgeUrl: 'http://127.0.0.1:8788',
+        logDir,
+        runtime: { configured: true, baseUrl: 'http://127.0.0.1:9999/v1', model: 'deepagents-local', profile: 'deepagents', runtimeAdapter: '' },
+        spawnProcess(command, args, options) {
+          calls.push({ type: 'spawn', command, args, options })
+          return child
+        },
+      },
+    )
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+
+  const spawnCall = calls.find((call) => call.type === 'spawn')
+  assert(spawnCall)
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_BASE_URL, 'http://127.0.0.1:9999/v1')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_MODEL, 'deepagents-local')
+  assert.equal(spawnCall.options.env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE, 'deepagents')
+  for (const key of scrubbedKeys) {
+    assert.equal(Object.hasOwn(spawnCall.options.env, key), false, `${key} should be scrubbed`)
+  }
+  assert.deepEqual(calls.at(-1), { type: 'unref' })
+})
+
 test('startBridgeCommand scrubs runtime and API key env when evidence-only runtime is selected', () => {
   const logDir = mkdtempSync(join(tmpdir(), 'llmwiki-bridge-start-env-'))
   const scrubbedKeys = [
@@ -3244,9 +3560,14 @@ test('startBridgeCommand scrubs runtime and API key env when evidence-only runti
     'LLMWIKI_AGENT_BRIDGE_MODEL',
     'LLMWIKI_AGENT_BRIDGE_API_KEY',
     'LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE',
+    'LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_COMMAND',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_ARGS',
+    'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_CWD',
     'HERMES_BASE_URL',
     'HERMES_MODEL',
     'HERMES_API_KEY',
+    'HERMES_A2A_BRIDGE_RUNTIME_ADAPTER',
     'HERMES_A2A_BRIDGE_RUNTIME_PROFILE',
     'HERMES_A2A_BRIDGE_BEARER_TOKEN',
     'DEEPAGENTS_BASE_URL',
@@ -3425,6 +3746,7 @@ test('detectLlmRuntime enables delegated-runtime when an LLM endpoint is configu
   assert.equal(runtime.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(runtime.model, 'local-model')
   assert.equal(runtime.profile, 'generic')
+  assert.equal(runtime.runtimeAdapter, '')
 
   const disabled = detectLlmRuntime({ noLlmRuntime: true }, { LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1' })
   assert.equal(disabled.configured, false)
@@ -3445,6 +3767,35 @@ test('detectLlmRuntime enables delegated-runtime when an LLM endpoint is configu
   assert.equal(standardEnv.configured, true)
   assert.equal(standardEnv.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(standardEnv.model, 'bridge-model')
+
+  const deepAgentsAcp = detectLlmRuntime({ 'runtime-adapter': 'acp' }, {})
+  assert.equal(deepAgentsAcp.configured, true)
+  assert.equal(deepAgentsAcp.baseUrl, '')
+  assert.equal(deepAgentsAcp.model, 'deepagents-local')
+  assert.equal(deepAgentsAcp.profile, 'deepagents')
+  assert.equal(deepAgentsAcp.runtimeAdapter, 'deepagents-acp')
+
+  const deepAgentsEndpointCompatibility = detectLlmRuntime({ 'llm-endpoint': 'http://127.0.0.1:9999/v1', 'runtime-profile': 'deepagents' }, {})
+  assert.equal(deepAgentsEndpointCompatibility.configured, true)
+  assert.equal(deepAgentsEndpointCompatibility.profile, 'deepagents')
+  assert.equal(deepAgentsEndpointCompatibility.runtimeAdapter, '')
+
+  const inheritedAdapterOnly = detectLlmRuntime({}, {
+    LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER: 'deepagents-acp',
+  })
+  assert.equal(inheritedAdapterOnly.configured, false)
+  assert.equal(inheritedAdapterOnly.runtimeAdapter, '')
+
+  const inheritedAdapterWithEndpoint = detectLlmRuntime({}, {
+    LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:9999/v1',
+    LLMWIKI_AGENT_BRIDGE_MODEL: 'deepagents-local',
+    LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE: 'deepagents',
+    LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER: 'deepagents-acp',
+  })
+  assert.equal(inheritedAdapterWithEndpoint.configured, true)
+  assert.equal(inheritedAdapterWithEndpoint.baseUrl, 'http://127.0.0.1:9999/v1')
+  assert.equal(inheritedAdapterWithEndpoint.profile, 'deepagents')
+  assert.equal(inheritedAdapterWithEndpoint.runtimeAdapter, '')
 })
 
 test('selectBridgeSmokeMode uses delegated only when runtime is explicit or bridge settings are configured', async () => {
@@ -3676,6 +4027,64 @@ test('configureBridgeRuntime saves only runtime connection fields', async (t) =>
     baseUrl: 'http://127.0.0.1:8642/v1',
     model: 'deepagents-local',
   })
+  assert.equal(Object.hasOwn(request.body, 'runtimeAdapter'), false)
+  assert.equal(Object.hasOwn(request.body, 'apiKey'), false)
+  assert.equal(Object.hasOwn(request.body, 'bridgeBearerToken'), false)
+})
+
+test('configureBridgeRuntime sends explicit DeepAgents ACP runtime adapter setting', async (t) => {
+  let server
+  let received = null
+  const receivedBody = new Promise((resolveBody) => {
+    server = createServer((request, response) => {
+      let raw = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk) => {
+        raw += chunk
+      })
+      request.on('end', () => {
+        received = {
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+          body: JSON.parse(raw),
+        }
+        resolveBody(received)
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ status: 'saved', applied: ['runtimeProfile', 'runtimeAdapter', 'model'] }))
+      })
+    })
+  })
+  await new Promise((resolveListen) => {
+    server.listen(0, '127.0.0.1', resolveListen)
+  })
+  t.after(() => {
+    server.close()
+  })
+
+  const address = server.address()
+  const result = await configureBridgeRuntime({
+    bridgeUrl: `http://127.0.0.1:${address.port}`,
+    runtime: {
+      configured: true,
+      baseUrl: '',
+      model: 'deepagents-local',
+      profile: 'deepagents',
+      runtimeAdapter: 'deepagents-acp',
+    },
+  })
+  const request = await receivedBody
+
+  assert.equal(result.ok, true)
+  assert.equal(request.method, 'PUT')
+  assert.equal(request.url, '/settings/config.json')
+  assert.equal(request.headers['content-type'], 'application/json')
+  assert.deepEqual(request.body, {
+    runtimeProfile: 'deepagents',
+    model: 'deepagents-local',
+    runtimeAdapter: 'deepagents-acp',
+  })
+  assert.equal(Object.hasOwn(request.body, 'baseUrl'), false)
   assert.equal(Object.hasOwn(request.body, 'apiKey'), false)
   assert.equal(Object.hasOwn(request.body, 'bridgeBearerToken'), false)
 })

@@ -71,7 +71,7 @@ transcripts are unchanged. Use `--no-clear-screen` or
 visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
-`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.1.0`;
+`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.2.0`;
 custom `--bridge http://host:port` values are reflected in those env
 assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
@@ -100,6 +100,17 @@ endpoint is shown, it came from an explicit CLI flag, the standard
 such as Hermes `/health`; blank Enter uses that verified/configured default,
 and `skip` forces evidence-only. If no default endpoint is shown, blank Enter
 or `skip` continues with evidence-only bridge smoke.
+DeepAgents ACP is an explicit bridge adapter path, not the default DeepAgents
+profile behavior. Use `--runtime-adapter deepagents-acp` when you want
+QuickStart to configure `runtimeAdapter=deepagents-acp`; a background bridge
+start then receives `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp`, and
+an already running bridge receives `runtimeAdapter: "deepagents-acp"` through
+`/settings/config.json`. Without that explicit adapter flag, DeepAgents keeps
+the existing endpoint-based compatibility path when you enter an
+OpenAI-compatible runtime URL, or the safe evidence-only fallback when you do
+not. Inherited `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER` values in the parent
+shell are ignored by QuickStart and scrubbed before background bridge startup;
+use the explicit flag when ACP is intended.
 Quickstart runs the bridge start command only after a second explicit
 approval. Once a bridge is running, it merge-registers the started sources and
 runs an A2A-style smoke request. After a successful bridge smoke, quickstart
@@ -152,7 +163,8 @@ normally skipped area.
 
 Quickstart intentionally prints full local paths for disambiguation so users can
 distinguish candidate folders before starting servers. Redact or replace those
-paths before publishing screenshots, logs, docs, or issue reports.
+paths and any private bridge/runtime endpoints before publishing screenshots,
+logs, docs, or issue reports.
 When several visible candidates are all named `wiki`, or a candidate is under
 `.llmwiki-work`, quickstart adds a small parent/project context to the display
 label while still printing the full path on the next line.

@@ -80,6 +80,11 @@
   recheck, `--yes` no-install default, fixed argv script execution, log writes,
   redirect safety, provider-secret env exclusion, and installer failure
   fallback.
+- [x] Add opt-in DeepAgents ACP QuickStart wiring through
+  `--runtime-adapter deepagents-acp`, background
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp`, and running bridge
+  `runtimeAdapter: "deepagents-acp"` settings updates while preserving the
+  existing endpoint-input compatibility path and evidence-only fallback.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
-- [ ] Add release workflow and registry trusted publisher setup when ready to
-  publish.
+- [x] Add GitHub Actions npm publish workflow for trusted publishing.
+- [ ] Confirm npm registry trusted publisher setup before publishing.

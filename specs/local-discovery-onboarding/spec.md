@@ -228,6 +228,21 @@ source server.
   `LLMWIKI_AGENT_BRIDGE_BASE_URL`, `LLMWIKI_AGENT_BRIDGE_MODEL`, and
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE`, but this path must not be advertised
   as a happy-path option.
+- If the user explicitly selects the DeepAgents ACP bridge path, for example
+  with `--runtime-adapter deepagents-acp`, quickstart may configure
+  `runtimeAdapter=deepagents-acp` without requiring an OpenAI-compatible
+  endpoint prompt. A background bridge start must receive
+  `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp`, and an already running
+  bridge must receive `runtimeAdapter: "deepagents-acp"` through
+  `/settings/config.json`. This is opt-in only: choosing the DeepAgents profile
+  without the adapter keeps the existing endpoint-based compatibility path, and
+  blank/skip runtime setup still falls back to evidence-only smoke while direct
+  source MCP URLs remain a successful handoff. Inherited bridge runtime adapter
+  environment variables such as `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER` must not
+  enable ACP inside QuickStart and must be scrubbed before background bridge
+  startup unless QuickStart is explicitly applying the adapter. Inherited parent
+  model/profile variables must not change the explicit ACP path's DeepAgents
+  profile semantics.
 - When no bridge is reachable, manual bridge-start guidance must be
   copy-paste safe for a custom `--bridge http://host:port`: printed examples
   must include `LLMWIKI_AGENT_BRIDGE_HOST` and
@@ -239,7 +254,9 @@ source server.
 - If the user chooses manual bridge startup and defers registration/smoke,
   quickstart must print the next register and smoke commands for the selected
   bridge URL and source config, plus direct source MCP URLs that remain usable
-  meanwhile.
+  meanwhile. The deferred smoke command must preserve the selected runtime
+  intent: delegated-runtime when an explicit LLM endpoint or runtime adapter was
+  configured, and evidence-only when runtime setup was skipped or unconfigured.
 - If `llmwiki-agent-bridge` is already running and the user configures a
   runtime endpoint during quickstart, quickstart must apply safe runtime fields
   through the bridge settings API before registration and smoke. If that live

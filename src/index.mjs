@@ -27,7 +27,7 @@ const SOURCE_PORT_PROBE_MAX_ATTEMPTS = 200
 const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
 const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
 const DEFAULT_TERMINAL_ROW_FALLBACK = 1000
-const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.1.0'
+const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.2.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS = 1500
 const DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
@@ -38,14 +38,29 @@ const BRIDGE_MODE_EVIDENCE_ONLY = 'evidence-only'
 const BRIDGE_MODE_DELEGATED_RUNTIME = 'delegated-runtime'
 const BRIDGE_ORCHESTRATION_MODES = new Set([BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_DELEGATED_RUNTIME, 'hybrid'])
 const RUNTIME_PROFILES = new Set(['generic', 'hermes', 'deepagents'])
+const RUNTIME_ADAPTER_CHAT_COMPLETIONS = 'chat-completions'
+const RUNTIME_ADAPTER_DEEPAGENTS_ACP = 'deepagents-acp'
+const RUNTIME_ADAPTERS = new Set([RUNTIME_ADAPTER_CHAT_COMPLETIONS, RUNTIME_ADAPTER_DEEPAGENTS_ACP])
+const RUNTIME_ADAPTER_ALIASES = new Map([
+  ['chatcompletions', RUNTIME_ADAPTER_CHAT_COMPLETIONS],
+  ['openai', RUNTIME_ADAPTER_CHAT_COMPLETIONS],
+  ['openaicompatible', RUNTIME_ADAPTER_CHAT_COMPLETIONS],
+  ['deepagentsacp', RUNTIME_ADAPTER_DEEPAGENTS_ACP],
+  ['acp', RUNTIME_ADAPTER_DEEPAGENTS_ACP],
+])
 const BRIDGE_RUNTIME_ENV_KEYS_TO_SCRUB = [
   'LLMWIKI_AGENT_BRIDGE_BASE_URL',
   'LLMWIKI_AGENT_BRIDGE_MODEL',
   'LLMWIKI_AGENT_BRIDGE_API_KEY',
   'LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE',
+  'LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER',
+  'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_COMMAND',
+  'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_ARGS',
+  'LLMWIKI_AGENT_BRIDGE_DEEPAGENTS_ACP_CWD',
   'HERMES_BASE_URL',
   'HERMES_MODEL',
   'HERMES_API_KEY',
+  'HERMES_A2A_BRIDGE_RUNTIME_ADAPTER',
   'HERMES_A2A_BRIDGE_RUNTIME_PROFILE',
   'HERMES_A2A_BRIDGE_RUNTIME_ID',
   'HERMES_A2A_BRIDGE_RUNTIME_NAME',
@@ -637,15 +652,18 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       : bridgeOptions
 
     if (result.bridgeSetup.continueToBridge === false) {
+      const deferredSmokeMode = selectDeferredBridgeSmokeMode(smokeOptions)
+      result.smokeMode = deferredSmokeMode
       writeStatus(output, ui, 'skip', 'Bridge setup instructions generated. Skipping registration and smoke until the bridge is running.')
       result.runSummary = writeQuickstartRunSummary({
         sources: result.started.sources,
         bridgeSetup: result.bridgeSetup,
         bridgeUrl,
         configPath: result.started.configPath,
+        smokeMode: deferredSmokeMode,
         mode: 'deferred-bridge',
       })
-      output.write(formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources: result.started.sources }))
+      output.write(formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources: result.started.sources, smokeMode: deferredSmokeMode }))
       output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'deferred-bridge', runSummary: result.runSummary }))
       result.skipped.push('register', 'smoke')
       return result
@@ -728,7 +746,10 @@ function writeBridgeSetupOverview(output, ui) {
 }
 
 async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = {}, logDir = defaultLogDir() }) {
-  const requestedChoice = requestedRuntimeSetupChoice(options)
+  const requestedAdapter = runtimeAdapterFromOptions(options)
+  const requestedRuntimeChoice = requestedRuntimeSetupChoice(options)
+  const requestedChoice = requestedRuntimeChoice
+    || (requestedAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP ? runtimeSetupChoiceById(RUNTIME_SETUP_DEEPAGENTS) : null)
   if (requestedChoice?.id === RUNTIME_SETUP_EXISTING) {
     writeStatus(output, ui, 'info', 'Using explicitly requested preconfigured LLM endpoint. This compatibility path is not part of the default QuickStart menu.')
     return promptRuntimeConnection({
@@ -744,13 +765,11 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = 
   if (!requestedChoice) {
     const preconfigured = detectLlmRuntime(options, {})
     if (preconfigured.configured) {
-      writeStatus(output, ui, 'ok', `Using preconfigured LLM runtime from explicit flags: profile=${preconfigured.profile}, model=${preconfigured.model}, endpoint=${preconfigured.baseUrl}`)
-      return configuredRuntimeSetup(runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING), preconfigured, {
-        runtimeSetup: RUNTIME_SETUP_EXISTING,
-        llmEndpoint: preconfigured.baseUrl,
-        llmModel: preconfigured.model,
-        runtimeProfile: preconfigured.profile,
-      })
+      writeStatus(output, ui, 'ok', `Using preconfigured LLM runtime from explicit flags: ${formatRuntimeDetails(preconfigured)}`)
+      const choice = preconfigured.runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP
+        ? runtimeSetupChoiceById(RUNTIME_SETUP_DEEPAGENTS)
+        : runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING)
+      return configuredRuntimeSetup(choice, preconfigured, runtimeOptionsFromRuntimeInfo(choice, preconfigured))
     }
   }
 
@@ -758,7 +777,10 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = 
   let choice = requestedChoice
   writeQuickstartSubscreen(output, ui, 'Bridge runtime setup')
   if (choice) {
-    writeStatus(output, ui, 'info', `Using runtime setup from explicit --runtime-setup: ${choice.label}.`)
+    const reason = requestedRuntimeChoice
+      ? 'explicit --runtime-setup'
+      : 'explicit --runtime-adapter deepagents-acp'
+    writeStatus(output, ui, 'info', `Using runtime setup from ${reason}: ${choice.label}.`)
   } else {
     writeStatus(output, ui, 'info', 'Choose LLM runtime setup before starting the bridge. Bridge env uses LLMWIKI_AGENT_BRIDGE_BASE_URL, LLMWIKI_AGENT_BRIDGE_MODEL, and LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE.')
     if (!prompter.usesInteractiveRuntimeSetup) {
@@ -798,6 +820,15 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = 
       runtime,
       io,
       logDir,
+    })
+  }
+
+  if (choice.id === RUNTIME_SETUP_DEEPAGENTS && runtimeAdapterDefault(options) === RUNTIME_ADAPTER_DEEPAGENTS_ACP) {
+    return configuredDeepAgentsAcpRuntimeSetup({
+      choice,
+      options,
+      output,
+      ui,
     })
   }
 
@@ -1443,14 +1474,16 @@ async function promptRuntimeConnection({ prompter, output, ui, options, choice, 
         runtimeProfileDefault(choice, options, process.env),
       )
     : choice.profile
+  const runtimeAdapter = runtimeAdapterDefault(options)
   const runtimeOptions = {
     runtimeSetup: choice.id,
     llmEndpoint: baseUrl,
     llmModel: model || choice.model,
     runtimeProfile: profile || choice.profile,
+    ...(runtimeAdapter ? { runtimeAdapter } : {}),
   }
   const runtimeInfo = detectLlmRuntime(runtimeOptions, {})
-  writeStatus(output, ui, 'ok', `Runtime configured for bridge start: profile=${runtimeInfo.profile}, model=${runtimeInfo.model}, endpoint=${runtimeInfo.baseUrl}`)
+  writeStatus(output, ui, 'ok', `Runtime configured for bridge start: ${formatRuntimeDetails(runtimeInfo)}`)
   return {
     choice: choice.id,
     label: choice.label,
@@ -1458,6 +1491,7 @@ async function promptRuntimeConnection({ prompter, output, ui, options, choice, 
     baseUrl: runtimeInfo.baseUrl,
     model: runtimeInfo.model,
     profile: runtimeInfo.profile,
+    runtimeAdapter: runtimeInfo.runtimeAdapter,
     runtimeOptions,
     runtime: runtimeInfo,
   }
@@ -1646,6 +1680,29 @@ function runtimeProfileDefault(choice, options = {}, env = process.env) {
   ), choice.profile)
 }
 
+function runtimeAdapterDefault(options = {}) {
+  return runtimeAdapterFromOptions(options) || ''
+}
+
+function runtimeAdapterFromOptions(options = {}) {
+  return parseRuntimeAdapterOption(options.runtimeAdapter ?? options['runtime-adapter'])
+}
+
+function parseRuntimeAdapterOption(value) {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, '')
+  if (!normalized) {
+    return undefined
+  }
+  const adapter = RUNTIME_ADAPTER_ALIASES.get(normalized)
+  if (adapter && RUNTIME_ADAPTERS.has(adapter)) {
+    return adapter
+  }
+  throw new Error(`Runtime adapter must be one of: ${[...RUNTIME_ADAPTERS].join(', ')}`)
+}
+
 function normalizeRuntimeBaseUrl(value) {
   const text = String(value || '').trim()
   if (!text) {
@@ -1684,9 +1741,41 @@ function configuredRuntimeSetup(choice, runtime, runtimeOptions = {}) {
     baseUrl: runtime.baseUrl,
     model: runtime.model,
     profile: runtime.profile,
+    runtimeAdapter: runtime.runtimeAdapter || '',
     runtimeOptions,
     runtime,
   }
+}
+
+function configuredDeepAgentsAcpRuntimeSetup({ choice, options = {}, output, ui } = {}) {
+  const runtimeOptions = {
+    runtimeSetup: choice.id,
+    llmModel: runtimeModelDefault(choice, options, {}),
+    runtimeProfile: choice.profile,
+    runtimeAdapter: RUNTIME_ADAPTER_DEEPAGENTS_ACP,
+  }
+  const runtimeInfo = detectLlmRuntime(runtimeOptions, {})
+  writeStatus(output, ui, 'ok', `DeepAgents ACP adapter selected explicitly: ${formatRuntimeDetails(runtimeInfo)}. QuickStart will not prompt for an OpenAI-compatible endpoint on this path.`)
+  return configuredRuntimeSetup(choice, runtimeInfo, runtimeOptions)
+}
+
+function runtimeOptionsFromRuntimeInfo(choice, runtime) {
+  return {
+    runtimeSetup: choice.id,
+    ...(runtime.baseUrl ? { llmEndpoint: runtime.baseUrl } : {}),
+    llmModel: runtime.model,
+    runtimeProfile: runtime.profile,
+    ...(runtime.runtimeAdapter ? { runtimeAdapter: runtime.runtimeAdapter } : {}),
+  }
+}
+
+function formatRuntimeDetails(runtime = {}) {
+  return [
+    `profile=${runtime.profile || 'generic'}`,
+    `model=${runtime.model || 'local-model'}`,
+    runtime.baseUrl ? `endpoint=${runtime.baseUrl}` : '',
+    runtime.runtimeAdapter ? `adapter=${runtime.runtimeAdapter}` : '',
+  ].filter(Boolean).join(', ')
 }
 
 function mergeRuntimeSetupOptions(options = {}, runtimeSetup = null) {
@@ -1694,6 +1783,16 @@ function mergeRuntimeSetupOptions(options = {}, runtimeSetup = null) {
     ...options,
     ...(runtimeSetup?.runtimeOptions || {}),
   }
+}
+
+function selectDeferredBridgeSmokeMode(options = {}) {
+  const requestedMode = stringOption(options.mode ?? options['orchestration-mode'], '')
+  if (requestedMode) {
+    return bridgeModeOption(requestedMode, BRIDGE_MODE_EVIDENCE_ONLY)
+  }
+  return detectLlmRuntime(options, {}).configured
+    ? BRIDGE_MODE_DELEGATED_RUNTIME
+    : BRIDGE_MODE_EVIDENCE_ONLY
 }
 
 async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridgeUrl, logDir }) {
@@ -1734,8 +1833,10 @@ async function guideBridgeSetup({ runtime, prompter, output, ui, options, bridge
   writeStatus(output, ui, 'info', `No llmwiki-agent-bridge is reachable at ${bridgeUrl} yet. Quickstart can start one as a detached background process, or you can start it yourself in another terminal.`)
   output.write(manualStartText)
 
-  if (runtimeInfo.configured) {
+  if (runtimeInfo.configured && runtimeInfo.baseUrl) {
     writeStatus(output, ui, 'info', 'An explicit LLM endpoint is configured for this run, so bridge smoke can use delegated-runtime mode after registration.')
+  } else if (runtimeInfo.configured && runtimeInfo.runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP) {
+    writeStatus(output, ui, 'info', 'The DeepAgents ACP runtime adapter is configured for this run, so bridge smoke can use delegated-runtime mode after registration.')
   } else {
     writeStatus(output, ui, 'info', 'No explicit LLM endpoint is configured for this run. Bridge smoke will default to evidence-only unless bridge settings prove otherwise.')
   }
@@ -1797,7 +1898,7 @@ async function maybeConfigureBridgeRuntime({ runtime, output, ui, prompter, brid
       bridgeUrl,
       runtime: runtimeInfo,
     })
-    writeStatus(output, ui, 'ok', `Bridge runtime settings applied: profile=${runtimeInfo.profile}, model=${runtimeInfo.model}, endpoint=${runtimeInfo.baseUrl}`)
+    writeStatus(output, ui, 'ok', `Bridge runtime settings applied: ${formatRuntimeDetails(runtimeInfo)}`)
     return { ok: true, skipped: false, ...configured }
   } catch (error) {
     writeStatus(output, ui, 'fail', `Could not apply runtime settings to the running bridge: ${error.message}`)
@@ -2278,6 +2379,7 @@ function writeQuickstartRunSummary({ sources = [], bridgeSetup = null, bridgeUrl
 }
 
 function formatQuickstartRunSummary({ sources = [], bridgeSetup = null, bridgeUrl = '', configPath = defaultConfigPath(), registered = null, smokeMode = '', smoked = null, mode = 'direct' } = {}) {
+  const followUpSmokeMode = bridgeModeOption(smokeMode || BRIDGE_MODE_EVIDENCE_ONLY, BRIDGE_MODE_EVIDENCE_ONLY)
   const lines = [
     '# llmwiki-bridge-start run details',
     '',
@@ -2306,7 +2408,7 @@ function formatQuickstartRunSummary({ sources = [], bridgeSetup = null, bridgeUr
       '1. Start llmwiki-agent-bridge with one of the manual examples shown in the quickstart transcript.',
       '2. After it is reachable, register the started source config and smoke test:',
       `   llmwiki-bridge-start register --bridge ${bridgeUrl} --config ${configPath}`,
-      `   llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode evidence-only`,
+      `   llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode ${followUpSmokeMode}`,
     )
   }
   lines.push('', '## Sources')
@@ -2361,13 +2463,14 @@ function formatCompactProcessDetailRows({ sources = [], bridgeSetup = null } = {
   return rows.length ? rows : ['- PID/log path details were not captured.']
 }
 
-function formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources = [] } = {}) {
+function formatDeferredBridgeSetupNextSteps({ bridgeUrl, configPath, sources = [], smokeMode = BRIDGE_MODE_EVIDENCE_ONLY } = {}) {
+  const followUpSmokeMode = bridgeModeOption(smokeMode, BRIDGE_MODE_EVIDENCE_ONLY)
   const lines = [
     'Bridge setup next steps:',
     '  1) Start llmwiki-agent-bridge with one of the manual examples above.',
     '  2) After it is reachable, register the started source config and smoke test:',
     `     llmwiki-bridge-start register --bridge ${bridgeUrl} --config ${configPath}`,
-    `     llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode evidence-only`,
+    `     llmwiki-bridge-start smoke --bridge ${bridgeUrl} --mode ${followUpSmokeMode}`,
   ]
   const mcpUrls = sources.map((source) => sourceMcpStreamUrl(source.url)).filter(Boolean)
   if (mcpUrls.length) {
@@ -4866,9 +4969,7 @@ export function startBridgeCommand(plan = bridgeStartPlan({}), { bridgeUrl = DEF
 
 function bridgeStartEnv(parsedBridgeUrl, runtime = detectLlmRuntime({}), baseEnv = process.env) {
   const env = { ...baseEnv }
-  if (!runtime.configured || runtime.disabled) {
-    scrubBridgeRuntimeEnv(env)
-  }
+  scrubBridgeRuntimeEnv(env)
   return {
     ...env,
     ...bridgeStartEnvOverrides(parsedBridgeUrl, runtime),
@@ -4881,9 +4982,10 @@ function bridgeStartEnvOverrides(parsedBridgeUrl, runtime = detectLlmRuntime({})
     LLMWIKI_AGENT_BRIDGE_PORT: parsedBridgeUrl.port || (parsedBridgeUrl.protocol === 'https:' ? '443' : '80'),
     ...(runtime.configured
       ? {
-          LLMWIKI_AGENT_BRIDGE_BASE_URL: runtime.baseUrl,
+          ...(runtime.baseUrl ? { LLMWIKI_AGENT_BRIDGE_BASE_URL: runtime.baseUrl } : {}),
           LLMWIKI_AGENT_BRIDGE_MODEL: runtime.model,
           LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE: runtime.profile,
+          ...(runtime.runtimeAdapter ? { LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER: runtime.runtimeAdapter } : {}),
         }
       : {}),
   }
@@ -5211,14 +5313,16 @@ export async function configureBridgeRuntime({ bridgeUrl = DEFAULT_BRIDGE_URL, r
   if (!runtime.configured) {
     return { ok: true, skipped: true, reason: 'no runtime endpoint configured' }
   }
+  const payload = {
+    runtimeProfile: parseRuntimeProfile(runtime.profile, 'generic'),
+    model: runtime.model,
+    ...(runtime.baseUrl ? { baseUrl: normalizeRuntimeBaseUrl(runtime.baseUrl) } : {}),
+    ...(runtime.runtimeAdapter ? { runtimeAdapter: parseRuntimeAdapterOption(runtime.runtimeAdapter) } : {}),
+  }
   const response = await fetchJson(new URL('/settings/config.json', bridgeUrl), {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      runtimeProfile: parseRuntimeProfile(runtime.profile, 'generic'),
-      baseUrl: normalizeRuntimeBaseUrl(runtime.baseUrl),
-      model: runtime.model,
-    }),
+    body: JSON.stringify(payload),
     timeoutMs,
   })
   return {
@@ -5251,9 +5355,13 @@ export function detectLlmRuntime(options = {}, env = process.env) {
       baseUrl: '',
       model: 'local-model',
       profile: 'generic',
+      runtimeAdapter: '',
       disabled: true,
     }
   }
+  const runtimeAdapter = runtimeAdapterDefault(options)
+  const fallbackProfile = runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP ? 'deepagents' : 'generic'
+  const fallbackModel = fallbackProfile === 'deepagents' ? 'deepagents-local' : 'local-model'
   const baseUrl = normalizeRuntimeBaseUrl(stringOption(
     options.llmEndpoint
       ?? options['llm-endpoint']
@@ -5267,19 +5375,20 @@ export function detectLlmRuntime(options = {}, env = process.env) {
       ?? options['llm-model']
       ?? options.model
       ?? env.LLMWIKI_AGENT_BRIDGE_MODEL,
-    'local-model',
+    fallbackModel,
   )
   const profile = parseRuntimeProfile(stringOption(
     options.runtimeProfile
       ?? options['runtime-profile']
       ?? env.LLMWIKI_AGENT_BRIDGE_RUNTIME_PROFILE,
-    'generic',
-  ), 'generic')
+    fallbackProfile,
+  ), fallbackProfile)
   return {
-    configured: Boolean(baseUrl),
+    configured: Boolean(baseUrl || runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP),
     baseUrl,
     model,
     profile,
+    runtimeAdapter,
   }
 }
 
@@ -5324,7 +5433,10 @@ export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_
 
   const runtimeInfo = detectLlmRuntime(options, env)
   if (runtimeInfo.configured) {
-    return { mode: BRIDGE_MODE_DELEGATED_RUNTIME, reason: `explicit LLM endpoint configured (${runtimeInfo.baseUrl})` }
+    const reason = runtimeInfo.baseUrl
+      ? `explicit LLM endpoint configured (${runtimeInfo.baseUrl})`
+      : `explicit runtime adapter configured (${runtimeInfo.runtimeAdapter})`
+    return { mode: BRIDGE_MODE_DELEGATED_RUNTIME, reason }
   }
 
   try {
@@ -5591,8 +5703,8 @@ function helpText() {
   return `llmwiki-bridge-start
 
 Usage:
-  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
-  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
+  llmwiki-bridge-start [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--runtime-adapter deepagents-acp] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
+  llmwiki-bridge-start quickstart [--path DIR|--workspace|--cwd] [--include-additional] [--bridge URL] [--setup-bridge] [--runtime-setup skip|hermes|deepagents] [--runtime-adapter deepagents-acp] [--llm-endpoint URL] [--llm-model MODEL] [--runtime-profile PROFILE] [--install-runtime|--no-install-runtime] [--serve-command CMD] [--yes] [--no-clear-screen]
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
@@ -5614,6 +5726,7 @@ Use --min-score 10 when intentionally looking for plain Markdown folders.
 Register merges by default. Use --replace only when intentionally replacing the bridge registry.
 Bridge setup is optional. Started source URLs can be used directly without llmwiki-agent-bridge.
 After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, Hermes, or DeepAgents.
+Use --runtime-adapter deepagents-acp only when explicitly opting into the DeepAgents ACP bridge adapter; DeepAgents without that flag keeps the existing endpoint-based compatibility path.
 If a selected runtime CLI is missing, interactive quickstart may offer an official installer after explicit approval; --yes automation still requires --install-runtime.
 Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode.
 Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
