@@ -324,6 +324,7 @@ test('quickstart discovery progress appends TTY heartbeat dots with an injected 
 
   const progress = createQuickstartDiscoveryProgress({
     stdout,
+    forceDiscoveryHeartbeat: true,
     discoveryProgressClock: clock,
     discoveryProgressIntervalMs: 25,
   }, { color: false })
@@ -426,6 +427,7 @@ test('quickstart validation progress appends TTY heartbeat dots with an injected
 
   const progress = createQuickstartValidationProgress({
     stdout,
+    forceValidationHeartbeat: true,
     validationProgressClock: clock,
     validationProgressIntervalMs: 25,
   }, { color: false })
