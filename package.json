@@ -1,6 +1,6 @@
 {
   "name": "llmwiki-bridge-start",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": false,
   "type": "module",
   "description": "Local adoption harness for connecting pre-built LLMWiki knowledge sources to agent bridges and coding-agent clients.",
