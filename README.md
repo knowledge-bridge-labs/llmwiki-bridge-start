@@ -71,7 +71,7 @@ transcripts are unchanged. Use `--no-clear-screen` or
 visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
-`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.2.0`;
+`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.2.1`;
 custom `--bridge http://host:port` values are reflected in those env
 assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
