@@ -85,6 +85,12 @@
   `LLMWIKI_AGENT_BRIDGE_RUNTIME_ADAPTER=deepagents-acp`, and running bridge
   `runtimeAdapter: "deepagents-acp"` settings updates while preserving the
   existing endpoint-input compatibility path and evidence-only fallback.
+- [x] Reject selected ancestor/descendant source folders and duplicate
+  manifest `source_id` values before source startup or bridge registration.
+- [x] Add `status`/`ls` to reconcile local started-source config, live source
+  health, and bridge registration state.
+- [x] Gate delegated-runtime smoke on runtime reachability and explicitly label
+  evidence-only smoke as not checking delegated runtime.
 - [ ] Add Docker Compose/k3s-oriented onboarding docs after local CLI stabilizes.
 - [x] Add GitHub Actions npm publish workflow for trusted publishing.
 - [ ] Confirm npm registry trusted publisher setup before publishing.

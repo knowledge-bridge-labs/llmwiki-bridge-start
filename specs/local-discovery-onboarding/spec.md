@@ -38,6 +38,9 @@ a low-friction way to find usable LLMWiki-compatible folders, start
 - Optionally run an A2A-style smoke query against the bridge, using
   delegated-runtime when an explicit LLM endpoint is configured through flags,
   environment, or quickstart runtime setup, and evidence-only otherwise.
+- Show post-quickstart local source status by reconciling the generated source
+  config, live source health, and bridge registry state when the bridge is
+  reachable.
 
 ## Non-goals
 
@@ -113,6 +116,13 @@ source server.
   low-confidence generic fallback.
 - `register` must merge by default and require explicit `--replace` to wipe the
   bridge registry.
+- `start`, `register`, and `quickstart` must fail loudly before registration or
+  source startup when selected sources would collide in bridge registration.
+  This includes duplicate manifest `source_id` values and selected
+  ancestor/descendant source paths that would make registry ownership
+  ambiguous. The error must tell the user to choose one folder or rebuild with a
+  unique `source_id`; it must not silently overwrite, disambiguate, or leave an
+  unregistered started source running.
 - When `quickstart` registers started sources with the bridge, the newly
   started sources must become the active selected set for bridge fan-out.
   Existing unrelated bridge registry entries must be preserved in merge mode
@@ -268,7 +278,18 @@ source server.
   settings UI (`/settings`). This bridge handoff must not describe the bridge
   as MCP Streamable HTTP or use the direct-source `/mcp/stream` path. The
   handoff should be concise and grouped separately from operational process
-  details.
+  details. If the smoke was evidence-only, the handoff must explicitly say that
+  delegated-runtime reachability was not checked.
+- `smoke --mode evidence-only` must report that delegated-runtime was not
+  checked. `smoke --mode delegated-runtime` and `hybrid` must verify a
+  reachable runtime path before claiming the delegated-runtime path is usable;
+  generic OpenAI-compatible endpoints are checked with a minimal `/models`
+  probe, while Hermes uses the supported `/health` or `/v1/health` probe. If
+  the runtime cannot be verified, the command must fail with an actionable
+  message pointing to bridge `/settings` and evidence-only mode.
+- Runtime setup and smoke mode selection must distinguish configured endpoint
+  values from reachable endpoints. A configured but unreachable endpoint must
+  not make quickstart claim delegated-runtime readiness.
 - Hermes and DeepAgents must be presented as first-class bridge runtime
   profiles. If the user already has one running, quickstart must collect its
   endpoint and model, then use the matching fixed runtime profile. If not,
@@ -336,7 +357,14 @@ source server.
 - The CLI must print full local paths for local source disambiguation and warn
   users to redact or replace them before publishing screenshots, logs, docs, or
   issue reports.
+- `status` and `ls` must read the local `.llmwiki-bridge-start/sources.json`
+  state, probe each started source's live `/health`, and compare local entries
+  with the bridge registry when `--bridge` is reachable. Human and `--json`
+  output must show source id, URL, local root/path, process id, source health,
+  and registration state. Local CLI output may show local paths; shareable docs
+  and examples must redact private paths and use only loopback fixture URLs.
 - Tests must cover scoring, discover parent/child overlap transparency,
   quickstart recommended/advanced presentation, supported-variant markers,
   default generic fallback behavior, manifest validation behavior where
-  practical, and registry merge safety.
+  practical, registry merge safety, source collision refusal, status
+  reconciliation, and runtime reachability gating.

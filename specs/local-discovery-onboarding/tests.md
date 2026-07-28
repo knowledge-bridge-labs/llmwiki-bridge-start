@@ -57,6 +57,10 @@
 - `start` readiness behavior: successful launches wait for `/health`, while
   failed readiness cleans up the spawned process and reports an actionable
   failure.
+- `start` refuses duplicate manifest `source_id` values before spawning any
+  source process.
+- Quickstart refuses selected ancestor/descendant source folders before
+  validation or startup.
 - `start` occupied-port behavior: if the requested loopback port already has a
   listening `/health` service, source startup advances to the next available
   port and writes the advanced URL to config instead of reporting readiness for
@@ -195,6 +199,13 @@
   a supported endpoint discovery contract.
 - Runtime setup skip/evidence-only disables inherited runtime env detection for
   the quickstart bridge smoke path.
+- Preconfigured runtime endpoints are probed before quickstart treats them as
+  delegated-runtime capable.
+- Generic OpenAI-compatible runtime reachability is checked with `/models`;
+  Hermes reachability remains checked with `/health` or `/v1/health`.
+- Evidence-only smoke reports that delegated runtime was not checked, while
+  delegated-runtime smoke fails before request dispatch when the runtime probe
+  fails.
 - Evidence-only or unconfigured bridge startup scrubs inherited runtime/API-key
   environment variables from the spawned bridge child process while preserving
   normal environment and explicit bridge host/port settings.
@@ -209,6 +220,9 @@
 - Quickstart port fallback UX: when requested source port startup falls back
   to a later port, the transcript includes a concise info line naming the
   requested port, source title/id, and assigned port.
+- `status`/`ls` reads local source config, probes source `/health`, compares
+  local entries to bridge `/settings/sources.json` when reachable, and reports
+  duplicate IDs, overlapping paths, and started-but-not-registered collisions.
 - Quickstart bridge success handoff: after registration and smoke, the
   transcript lists bridge base URL, `POST /message:send`, `POST /mcp`, and
   `/settings` as a concise grouped block without describing the bridge as MCP

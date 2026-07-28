@@ -7,7 +7,7 @@ import { Readable, Writable } from 'node:stream'
 import { test } from 'node:test'
 import { cursor as ansiCursor, erase as ansiErase } from 'sisteransi'
 
-import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, downloadRuntimeInstallerScript, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, runRuntimeInstallPlan, runtimeInstallPlan, scanCandidateDirectories, scoreCandidate, scrubInstallerEnv, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources } from '../src/index.mjs'
+import { configureBridgeRuntime, createQuickstartDiscoveryProgress, createQuickstartValidationProgress, detectLlmRuntime, discoverCandidates, downloadRuntimeInstallerScript, inspectRuntimeFramework, mergeBridgeSources, parseArgs, parseCandidateSelection, parseYesNo, probeRuntimeEndpoint, quickstart, registerSources, resolveServeInvocation, runCli, runRuntimeInstallPlan, runtimeInstallPlan, scanCandidateDirectories, scoreCandidate, scrubInstallerEnv, selectBridgeSmokeMode, smokeBridge, startBridgeCommand, startSources, statusSources } from '../src/index.mjs'
 
 test('parseArgs collects repeated options', () => {
   const parsed = parseArgs(['discover', '--path', 'a', '--path', 'b', '--validate'])
@@ -736,6 +736,168 @@ test('startSources cleans up a spawned source when /health never becomes ready',
   })
   await waitForProcessExit(pid, 3000)
   assert.equal(isProcessAlive(pid), false)
+})
+
+test('startSources rejects duplicate manifest source IDs before spawning any server', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-start-duplicate-id-'))
+  const first = join(root, 'first-wiki')
+  const second = join(root, 'second-wiki')
+  mkdirSync(first)
+  mkdirSync(second)
+  const pidFile = join(root, 'serve.pid')
+  const serveScript = writeServeStubScript(root, { pidFile })
+  const configPath = join(root, 'sources.json')
+
+  await assert.rejects(
+    () => startSources({
+      paths: [first, second],
+      portStart: 12001,
+      serveInvocation: { command: process.execPath, baseArgs: [serveScript], cwd: root },
+      configPath,
+      logDir: join(root, 'logs'),
+      healthTimeoutMs: 300,
+      healthIntervalMs: 50,
+    }),
+    /duplicate source_id "ready-wiki"/,
+  )
+
+  assert.equal(existsSync(pidFile), false)
+  assert.equal(existsSync(configPath), false)
+})
+
+test('quickstart rejects selected ancestor and descendant source folders before validation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-quickstart-overlap-'))
+  const parent = join(root, 'project')
+  const child = join(parent, 'wiki')
+  mkdirSync(child, { recursive: true })
+  const stdout = captureWritable()
+  const calls = []
+  const answers = ['y', 'all']
+
+  await assert.rejects(
+    () => quickstart(
+      { path: root },
+      {
+        stdout,
+        stderr: stdout,
+        async prompt() {
+          return answers.shift()
+        },
+      },
+      {
+        resolveServeInvocation() {
+          return { command: 'mock-serve', baseArgs: [], cwd: root }
+        },
+        async discoverCandidates(args) {
+          calls.push(['discover', args])
+          return {
+            roots: args.roots,
+            count: 2,
+            minScore: args.minScore,
+            candidates: [
+              { rank: 1, path: parent, score: 90, confidence: 'high', markdownCount: 200, signals: ['llmwiki-root:hot+index-or-overview', 'llmwiki-typed-dir', 'frontmatter:source_refs'] },
+              { rank: 2, path: child, score: 80, confidence: 'high', markdownCount: 50, signals: ['hub-file', 'llmwiki-typed-dir', 'name:wiki', 'markdown:50+'] },
+            ],
+          }
+        },
+        async validateCandidate(candidate) {
+          calls.push(['validate', candidate.path])
+          throw new Error('validation should not run for overlapping selected paths')
+        },
+        async startSources(args) {
+          calls.push(['start', args])
+          throw new Error('start should not run for overlapping selected paths')
+        },
+      },
+    ),
+    /overlap by ancestor path/,
+  )
+
+  assert.deepEqual(calls.map((call) => call[0]), ['discover'])
+  assert.match(stdout.text, /Selected source folder\(s\):/)
+  assert.match(stdout.text, new RegExp(escapeRegExp(parent)))
+  assert.match(stdout.text, new RegExp(escapeRegExp(child)))
+})
+
+test('statusSources reconciles local sources, health, and bridge registration state', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'llmwiki-status-'))
+  const parent = join(root, 'vault')
+  const child = join(parent, 'wiki')
+  mkdirSync(child, { recursive: true })
+  const firstSource = await startStatusFixtureSource('ok')
+  const secondSource = await startStatusFixtureSource('ok')
+  t.after(() => closeServer(firstSource.server))
+  t.after(() => closeServer(secondSource.server))
+
+  const configPath = join(root, '.llmwiki-bridge-start', 'sources.json')
+  mkdirSync(join(root, '.llmwiki-bridge-start'), { recursive: true })
+  writeFileSync(configPath, `${JSON.stringify({
+    version: 1,
+    sources: [
+      {
+        id: 'kb-alpha',
+        title: 'Vault Root',
+        protocol: 'llmwiki-http',
+        status: 'ready',
+        selected: true,
+        url: firstSource.url,
+        path: parent,
+        processId: process.pid,
+        manifest: { source_id: 'kb-alpha', bundle_id: 'kb-alpha:sha256:first', page_count: 1225, approved_page_count: 1032 },
+      },
+      {
+        id: 'kb-alpha',
+        title: 'Vault Wiki',
+        protocol: 'llmwiki-http',
+        status: 'ready',
+        selected: true,
+        url: secondSource.url,
+        path: child,
+        processId: process.pid,
+        manifest: { source_id: 'kb-alpha', bundle_id: 'kb-alpha:sha256:second', page_count: 67, approved_page_count: 67 },
+      },
+    ],
+  }, null, 2)}\n`, 'utf8')
+
+  const bridge = createServer((request, response) => {
+    if (request.url === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'ok' }))
+      return
+    }
+    if (request.url === '/settings/sources.json') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        sources: [
+          { id: 'kb-alpha', title: 'Vault Wiki', protocol: 'llmwiki-http', status: 'ready', selected: true, url: secondSource.url },
+        ],
+      }))
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'not found' }))
+  })
+  await listenOnPort(bridge, 0)
+  t.after(() => closeServer(bridge))
+  const bridgeUrl = `http://127.0.0.1:${bridge.address().port}`
+
+  const status = await statusSources({ bridgeUrl, configPath })
+
+  assert.equal(status.startedCount, 2)
+  assert.equal(status.healthyCount, 2)
+  assert.equal(status.registeredCount, 1)
+  assert.equal(status.sources[0].registration.state, 'id-conflict')
+  assert.equal(status.sources[0].registration.registeredUrl, secondSource.url)
+  assert.equal(status.sources[1].registration.state, 'registered')
+  assert(status.warnings.some((warning) => warning.code === 'duplicate_source_id'))
+  assert(status.warnings.some((warning) => warning.code === 'overlapping_source_paths'))
+  assert(status.warnings.some((warning) => warning.code === 'source_id_registered_elsewhere'))
+
+  const stdout = captureWritable()
+  await runCli(['status', '--bridge', bridgeUrl, '--config', configPath], { stdout, stderr: stdout })
+  assert.match(stdout.text, /REGISTERED/)
+  assert.match(stdout.text, /no \(id at http:\/\/127\.0\.0\.1:/)
+  assert.match(stdout.text, /Warnings:/)
 })
 
 test('quickstart can end after starting direct local source URLs without bridge setup', async () => {
@@ -1885,6 +2047,11 @@ test('quickstart generates bridge setup command without executing it and runs de
           }],
         }
       },
+      async probeRuntimeEndpoint(args) {
+        calls.push(['runtime-probe', args])
+        assert.equal(args.baseUrl, 'http://127.0.0.1:8642/v1')
+        return { ok: true, profile: args.profile, baseUrl: args.baseUrl, url: 'http://127.0.0.1:8642/v1/models', status: 'reachable' }
+      },
       async checkBridgeHealth(bridgeUrl) {
         calls.push(['bridge-health', bridgeUrl])
         return { ok: false, error: 'connection refused', url: bridgeUrl }
@@ -1917,7 +2084,7 @@ test('quickstart generates bridge setup command without executing it and runs de
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan', 'register', 'smoke'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'runtime-probe', 'bridge-health', 'bridge-plan', 'register', 'runtime-probe', 'smoke'])
   assert.equal(calls.find((call) => call[0] === 'register')[1].replace, false)
   assert.equal(calls.find((call) => call[0] === 'smoke')[1].mode, 'delegated-runtime')
   assert.equal(result.smokeMode, 'delegated-runtime')
@@ -1925,10 +2092,12 @@ test('quickstart generates bridge setup command without executing it and runs de
   assert.equal(result.bridgeSetup.executed, false)
   assert.match(stdout.text, /\[4\/5\] Optional bridge setup/)
   assert.match(stdout.text, /\[5\/5\] Register and smoke test/)
-  assert.match(stdout.text, /Using preconfigured LLM runtime from explicit flags/)
+  assert.match(stdout.text, /Checking preconfigured LLM runtime from explicit flags/)
+  assert.match(stdout.text, /Using reachable preconfigured LLM runtime from explicit flags/)
   assert.doesNotMatch(stdout.text, /Runtime setup options:/)
   assert.doesNotMatch(stdout.text, /existing LLM endpoint/)
   assert.equal(result.runtimeSetup.configured, true)
+  assert.equal(result.runtimeSetup.reachable, true)
   assert.equal(result.runtimeSetup.baseUrl, 'http://127.0.0.1:8642/v1')
   assert.equal(result.runtimeSetup.model, 'local-model')
   assert.equal(result.runtimeSetup.profile, 'generic')
@@ -1995,6 +2164,11 @@ test('quickstart prints delegated deferred bridge setup next steps when runtime 
           }],
         }
       },
+      async probeRuntimeEndpoint(args) {
+        calls.push(['runtime-probe', args])
+        assert.equal(args.baseUrl, 'http://127.0.0.1:8642/v1')
+        return { ok: true, profile: args.profile, baseUrl: args.baseUrl, url: 'http://127.0.0.1:8642/v1/models', status: 'reachable' }
+      },
       async checkBridgeHealth(url) {
         calls.push(['bridge-health', url])
         return { ok: false, error: 'connection refused', url }
@@ -2014,7 +2188,7 @@ test('quickstart prints delegated deferred bridge setup next steps when runtime 
     },
   )
 
-  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'bridge-health', 'bridge-plan'])
+  assert.deepEqual(calls.map((call) => call[0]), ['discover', 'validate', 'start', 'runtime-probe', 'bridge-health', 'bridge-plan'])
   assert.deepEqual(result.skipped, ['register', 'smoke'])
   assert.equal(result.bridgeSetup.continueToBridge, false)
   assert.match(stdout.text, /Bridge setup instructions generated\. Skipping registration and smoke until the bridge is running\./)
@@ -2336,7 +2510,7 @@ test('quickstart prints final bridge handoff after successful smoke', async () =
   const handoffStart = stdout.text.indexOf('Bridge handoff')
   assert.notEqual(handoffStart, -1)
   const handoff = stdout.text.slice(handoffStart)
-  assert.match(handoff, /Bridge handoff\n\n  ─+\n  Ready bridge endpoints/)
+  assert.match(handoff, /Bridge handoff\n\n  ─+\n  Bridge endpoints responded; evidence-only smoke did not check delegated-runtime reachability\./)
   assert.match(handoff, /MCP JSON-RPC\s+POST http:\/\/127\.0\.0\.1:8788\/mcp/)
   assert.match(handoff, /A2A answer\s+POST http:\/\/127\.0\.0\.1:8788\/message:send/)
   assert.match(handoff, /Settings\s+http:\/\/127\.0\.0\.1:8788\/settings/)
@@ -3809,11 +3983,22 @@ test('selectBridgeSmokeMode uses delegated only when runtime is explicit or brid
 
   const delegatedFromEnv = await selectBridgeSmokeMode({
     env: { LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1' },
+    probeRuntime: async (args) => ({ ok: true, baseUrl: args.baseUrl, profile: args.profile, url: `${args.baseUrl}/models` }),
     inspectBridgeRuntime: async () => {
       throw new Error('settings should not be inspected when env is explicit')
     },
   })
   assert.equal(delegatedFromEnv.mode, 'delegated-runtime')
+
+  const unreachableEnv = await selectBridgeSmokeMode({
+    env: { LLMWIKI_AGENT_BRIDGE_BASE_URL: 'http://127.0.0.1:8642/v1' },
+    probeRuntime: async (args) => ({ ok: false, baseUrl: args.baseUrl, profile: args.profile, error: 'connection refused' }),
+    inspectBridgeRuntime: async () => {
+      throw new Error('settings should not be inspected when env is explicit but unreachable')
+    },
+  })
+  assert.equal(unreachableEnv.mode, 'evidence-only')
+  assert.match(unreachableEnv.reason, /not reachable/)
 
   const legacyEnv = await selectBridgeSmokeMode({
     env: { HERMES_BASE_URL: 'http://legacy-hermes-env.example.invalid:8642/v1' },
@@ -3865,13 +4050,25 @@ test('probeRuntimeEndpoint verifies Hermes /health and /v1/health without env de
   const generic = await probeRuntimeEndpoint({
     baseUrl: 'http://127.0.0.1:8642/v1',
     profile: 'deepagents',
-    async fetchJson() {
-      throw new Error('DeepAgents probe should not call network health endpoints')
+    async fetchJson(url) {
+      fetchCalls.push(String(url))
+      return { data: [] }
     },
   })
   assert.equal(generic.ok, true)
-  assert.equal(generic.skipped, true)
-  assert.match(generic.reason, /no registered framework health probe/)
+  assert.equal(generic.url, 'http://127.0.0.1:8642/v1/models')
+  assert.equal(generic.endpoint, 'models')
+
+  const failedGeneric = await probeRuntimeEndpoint({
+    baseUrl: 'http://127.0.0.1:8642/v1',
+    profile: 'generic',
+    async fetchJson() {
+      throw new Error('connection refused')
+    },
+  })
+  assert.equal(failedGeneric.ok, false)
+  assert.equal(failedGeneric.url, 'http://127.0.0.1:8642/v1/models')
+  assert.match(failedGeneric.error, /connection refused/)
 })
 
 test('inspectRuntimeFramework checks Hermes with supported CLI and health probe', async () => {
@@ -4119,12 +4316,74 @@ test('smokeBridge sends requested orchestration mode', async (t) => {
     bridgeUrl: `http://127.0.0.1:${address.port}`,
     query: 'release readiness',
     mode: 'delegated-runtime',
+    runtime: { configured: true, baseUrl: 'http://127.0.0.1:8642/v1', profile: 'generic', model: 'local-model' },
+    async probeRuntime(args) {
+      assert.equal(args.baseUrl, 'http://127.0.0.1:8642/v1')
+      return { ok: true, baseUrl: args.baseUrl, profile: args.profile, url: 'http://127.0.0.1:8642/v1/models' }
+    },
   })
   const body = await receivedBody
 
   assert.equal(result.mode, 'delegated-runtime')
+  assert.equal(result.runtimeChecked, true)
   assert.equal(body.data.query, 'release readiness')
   assert.equal(body.data.mode, 'delegated-runtime')
+})
+
+test('smokeBridge evidence-only reports delegated runtime was not checked', async (t) => {
+  let received = false
+  const server = createServer((request, response) => {
+    if (request.url === '/message:send') {
+      received = true
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: { state: 'completed' } }))
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'not found' }))
+  })
+  await listenOnPort(server, 0)
+  t.after(() => closeServer(server))
+
+  const result = await smokeBridge({
+    bridgeUrl: `http://127.0.0.1:${server.address().port}`,
+    query: 'source-only readiness',
+    mode: 'evidence-only',
+  })
+
+  assert.equal(received, true)
+  assert.equal(result.runtimeChecked, false)
+  assert.deepEqual(result.warnings, ['Evidence-only smoke did not check delegated-runtime reachability.'])
+})
+
+test('smokeBridge delegated-runtime fails before request when runtime is unreachable', async (t) => {
+  let received = false
+  const server = createServer((request, response) => {
+    if (request.url === '/message:send') {
+      received = true
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: { state: 'completed' } }))
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'not found' }))
+  })
+  await listenOnPort(server, 0)
+  t.after(() => closeServer(server))
+
+  await assert.rejects(
+    () => smokeBridge({
+      bridgeUrl: `http://127.0.0.1:${server.address().port}`,
+      query: 'runtime readiness',
+      mode: 'delegated-runtime',
+      runtime: { configured: true, baseUrl: 'http://127.0.0.1:8642/v1', profile: 'generic', model: 'local-model' },
+      async probeRuntime(args) {
+        return { ok: false, baseUrl: args.baseUrl, profile: args.profile, error: 'connection refused' }
+      },
+    }),
+    /Configure the bridge runtime at http:\/\/127\.0\.0\.1:\d+\/settings/,
+  )
+  assert.equal(received, false)
 })
 
 test('scoreCandidate recognizes native llmwiki shape', () => {
@@ -4970,6 +5229,23 @@ function nonTtyReadable() {
   })
 }
 
+async function startStatusFixtureSource(status = 'ok') {
+  const server = createServer((request, response) => {
+    if (request.url === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status }))
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'not found' }))
+  })
+  await listenOnPort(server, 0)
+  return {
+    server,
+    url: `http://127.0.0.1:${server.address().port}`,
+  }
+}
+
 function noopProgress() {
   return {
     start() {},
@@ -5205,4 +5481,8 @@ function killPid(pid) {
 
 function countOccurrences(text, needle) {
   return String(text).split(needle).length - 1
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
 }

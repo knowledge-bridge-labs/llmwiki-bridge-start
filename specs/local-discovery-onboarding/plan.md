@@ -13,9 +13,12 @@
 5. Validate candidates by invoking `llmwiki-serve manifest`.
 6. Start selected sources through `llmwiki-serve serve`, wait for bounded
    loopback health readiness, and write a local source config only for ready
-   sources.
+   sources. Before launching any source process, reject selected
+   ancestor/descendant paths and duplicate manifest `source_id` values with an
+   actionable error.
 7. Register sources through the bridge settings endpoint with merge/upsert
-   semantics.
+   semantics. Reject duplicate incoming source IDs before writing bridge
+   settings so older generated configs cannot silently collapse entries.
 8. Add a guided quickstart flow that leads with `--path DIR`, `--workspace`, or
    bare invocation, can stop after direct source startup, and can continue into
    optional bridge setup.
@@ -60,9 +63,12 @@
 10. Start `llmwiki-agent-bridge` with `cross-spawn` so package command
     resolution works cross-platform without a hand-written Windows `cmd.exe`
     wrapper.
-11. Add an optional bridge smoke command that uses evidence-only mode by default
-   and delegated-runtime when an explicit LLM endpoint is configured.
-12. Verify with unit tests, package dry-run, targeted local discovery, and a
+11. Add a `status`/`ls` command that reconciles local started-source config,
+   live source health, and bridge registry state when reachable.
+12. Add an optional bridge smoke command that uses evidence-only mode by default
+   and delegated-runtime only when an explicit or bridge-configured runtime is
+   reachable. Evidence-only output must say delegated runtime was not checked.
+13. Verify with unit tests, package dry-run, targeted local discovery, and a
    local source restart smoke.
 
 ## Risks
@@ -100,6 +106,9 @@
 - Spawned source processes can fail after launch because of port conflicts,
   missing runtime dependencies, or adapter errors; verify `/health` before
   presenting a URL as ready and clean up failed child processes.
+- Historical generated source configs may contain duplicate IDs. `status`
+  should report them clearly, while `register` should refuse to write them back
+  into the bridge registry.
 
 ## Documentation Plan
 
@@ -152,6 +161,12 @@
   alone, determines whether the candidate is startable.
 - Startup docs must say that a source is considered ready only after its HTTP
   health endpoint responds.
+- Status docs must say that `status`/`ls` is a local diagnostic command over
+  `.llmwiki-bridge-start/sources.json`, source `/health`, and reachable bridge
+  registry state.
+- Smoke docs must distinguish evidence-only source checks from
+  delegated-runtime checks, and must say delegated-runtime requires a reachable
+  runtime endpoint.
 - Non-goals must remain explicit that the harness does not compile knowledge,
   convert app-specific syntax, crawl or sync remote sources, or replace bridge
   orchestration.

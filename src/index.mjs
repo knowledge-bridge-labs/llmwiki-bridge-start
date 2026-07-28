@@ -23,11 +23,14 @@ const FAST_DISCOVERY_MAX_BUFFER = 32 * 1024 * 1024
 const ASYNC_DISCOVERY_YIELD_EVERY = 64
 const DEFAULT_SOURCE_HEALTH_TIMEOUT_MS = 15000
 const DEFAULT_SOURCE_HEALTH_INTERVAL_MS = 500
+const DEFAULT_STATUS_SOURCE_HEALTH_TIMEOUT_MS = 2000
+const DEFAULT_STATUS_BRIDGE_TIMEOUT_MS = 3000
+const DEFAULT_RUNTIME_REACHABILITY_TIMEOUT_MS = 2000
 const SOURCE_PORT_PROBE_MAX_ATTEMPTS = 200
 const DEFAULT_DISCOVERY_PROGRESS_INTERVAL_MS = 1000
 const DEFAULT_DISCOVERY_PROGRESS_MESSAGE = 'Searching local folders for LLMWiki candidates...'
 const DEFAULT_TERMINAL_ROW_FALLBACK = 1000
-const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.2.1'
+const DEFAULT_BRIDGE_PACKAGE_SPEC = 'llmwiki-agent-bridge@0.3.0'
 const DEFAULT_BRIDGE_RUNTIME_BASE_URL = 'http://127.0.0.1:8642/v1'
 const DEFAULT_RUNTIME_FRAMEWORK_DETECTION_TIMEOUT_MS = 1500
 const DEFAULT_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
@@ -410,6 +413,14 @@ export async function runCli(argv, io = { stdin: process.stdin, stdout: process.
     writeResult(result, options, io)
     return
   }
+  if (command === 'status' || command === 'ls') {
+    const result = await statusSources({
+      bridgeUrl: stringOption(options.bridge, DEFAULT_BRIDGE_URL),
+      configPath: stringOption(options.config, defaultConfigPath()),
+    })
+    writeResult(result, options, io)
+    return
+  }
   if (command === 'start') {
     const result = await startSources({
       paths: arrayOption(options.path),
@@ -440,6 +451,8 @@ export async function runCli(argv, io = { stdin: process.stdin, stdout: process.
       bridgeUrl: stringOption(options.bridge, DEFAULT_BRIDGE_URL),
       query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
       mode: bridgeModeOption(options.mode ?? options['orchestration-mode'], BRIDGE_MODE_EVIDENCE_ONLY),
+      runtime: detectLlmRuntime(options, process.env),
+      preflightRuntime: true,
     })
     writeResult(result, options, io)
     return
@@ -567,6 +580,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       output.write(formatSelectedSourceEcho(selected, candidatePlan.visibleCandidates))
       writeQuickstartStep(output, ui, 3, QUICKSTART_STEP_TOTAL, 'Validate and start local sources')
     }
+    assertNoSelectedSourcePathConflicts(selected, { action: 'quickstart source selection' })
     if (!await confirmQuickstart(prompter, `Start ${selected.length} selected source server(s) on loopback?\nThis validates each selected folder first.`, true)) {
       writeStatus(output, ui, 'skip', 'Skipped source startup. No source servers were started.')
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
@@ -598,6 +612,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       result.skipped.push('start', 'bridge-setup', 'register', 'smoke')
       return result
     }
+    assertNoValidatedSourceIdConflicts(startable, { action: 'quickstart source selection' })
     result.started = await runtime.startSources({
       paths: startable.map((candidate) => candidate.path),
       host: stringOption(options.host, DEFAULT_HOST),
@@ -681,13 +696,23 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
     })
     writeStatus(output, ui, 'ok', formatQuickstartRegistrationSuccess(result.registered, quickstartSelectedIds))
 
-    const smokePlan = await runtime.selectBridgeSmokeMode({ options: smokeOptions, bridgeUrl, env: process.env })
+    const smokePlan = await runtime.selectBridgeSmokeMode({
+      options: smokeOptions,
+      bridgeUrl,
+      env: process.env,
+      probeRuntime: runtime.probeRuntimeEndpoint || probeRuntimeEndpoint,
+    })
     result.smokeMode = smokePlan.mode
+    if (smokePlan.mode === BRIDGE_MODE_EVIDENCE_ONLY) {
+      writeStatus(output, ui, 'info', 'Evidence-only smoke checks source retrieval only; delegated-runtime reachability was not checked.')
+    }
     writeStatus(output, ui, 'run', `Running bridge smoke in ${formatBridgeModeLabel(smokePlan.mode)} mode (${smokePlan.reason}).`)
     result.smoked = await runtime.smokeBridge({
       bridgeUrl,
       query: stringOption(options.query, 'What LLMWiki sources are available and what are they for?'),
       mode: smokePlan.mode,
+      runtime: detectLlmRuntime(smokeOptions, process.env),
+      preflightRuntime: smokePlan.mode !== BRIDGE_MODE_EVIDENCE_ONLY,
     })
     writeStatus(output, ui, 'ok', `Smoke complete: ${result.smoked.status?.state || result.smoked.status?.message?.kind || 'ok'}`)
     result.runSummary = writeQuickstartRunSummary({
@@ -700,7 +725,7 @@ export async function quickstart(options = {}, io = { stdin: process.stdin, stdo
       smoked: result.smoked,
       mode: 'bridge',
     })
-    output.write(formatBridgeHandoff(bridgeUrl))
+    output.write(formatBridgeHandoff(bridgeUrl, { smokeMode: result.smokeMode }))
     output.write(formatLocalProcessLifecycleNote({ sources: result.started.sources, bridgeSetup: result.bridgeSetup, mode: 'bridge', runSummary: result.runSummary }))
     return result
   } finally {
@@ -765,11 +790,24 @@ async function guideRuntimeSetup({ prompter, output, ui, options, runtime, io = 
   if (!requestedChoice) {
     const preconfigured = detectLlmRuntime(options, {})
     if (preconfigured.configured) {
-      writeStatus(output, ui, 'ok', `Using preconfigured LLM runtime from explicit flags: ${formatRuntimeDetails(preconfigured)}`)
       const choice = preconfigured.runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP
         ? runtimeSetupChoiceById(RUNTIME_SETUP_DEEPAGENTS)
         : runtimeSetupChoiceById(RUNTIME_SETUP_EXISTING)
-      return configuredRuntimeSetup(choice, preconfigured, runtimeOptionsFromRuntimeInfo(choice, preconfigured))
+      writeStatus(output, ui, 'info', `Checking preconfigured LLM runtime from explicit flags: ${formatRuntimeDetails(preconfigured)}`)
+      const readiness = await verifyPreconfiguredRuntimeSetup({
+        choice,
+        runtimeInfo: preconfigured,
+        output,
+        ui,
+        probe: runtime.probeRuntimeEndpoint || probeRuntimeEndpoint,
+      })
+      if (!readiness.ok) {
+        const nextAction = `Start the configured runtime endpoint, verify it responds, then rerun with --llm-endpoint ${preconfigured.baseUrl || '<runtime-url>'} --llm-model ${preconfigured.model} --runtime-profile ${preconfigured.profile}, or use bridge /settings.`
+        writeStatus(output, ui, 'skip', `Preconfigured runtime was not reachable. Continuing with evidence-only bridge mode. Next action: ${nextAction}`)
+        return unconfiguredRuntimeSetup(choice, nextAction)
+      }
+      writeStatus(output, ui, 'ok', `Using reachable preconfigured LLM runtime from explicit flags: ${formatRuntimeDetails(preconfigured)}`)
+      return configuredRuntimeSetup(choice, { ...preconfigured, reachable: true, reachability: readiness }, runtimeOptionsFromRuntimeInfo(choice, preconfigured))
     }
   }
 
@@ -1482,7 +1520,11 @@ async function promptRuntimeConnection({ prompter, output, ui, options, choice, 
     runtimeProfile: profile || choice.profile,
     ...(runtimeAdapter ? { runtimeAdapter } : {}),
   }
-  const runtimeInfo = detectLlmRuntime(runtimeOptions, {})
+  const runtimeInfo = {
+    ...detectLlmRuntime(runtimeOptions, {}),
+    reachable: true,
+    reachability: endpointProbe,
+  }
   writeStatus(output, ui, 'ok', `Runtime configured for bridge start: ${formatRuntimeDetails(runtimeInfo)}`)
   return {
     choice: choice.id,
@@ -1590,15 +1632,14 @@ function writeRuntimeEndpointDefaultNotice(output, ui, choice, endpointDefault =
 }
 
 async function verifyRuntimeEndpointForChoice({ choice, baseUrl, output, ui, probe = probeRuntimeEndpoint } = {}) {
-  if (choice.id !== RUNTIME_SETUP_HERMES) {
-    return { ok: true, skipped: true, reason: `${choice.label} has no registered framework health probe in quickstart yet` }
-  }
   const health = await probe({ baseUrl, profile: choice.profile })
   if (health.ok) {
-    writeStatus(output, ui, 'ok', `${choice.label} health check passed: ${health.url}`)
+    const checkName = choice.id === RUNTIME_SETUP_HERMES || choice.profile === RUNTIME_SETUP_HERMES ? 'health check' : 'OpenAI-compatible /models check'
+    writeStatus(output, ui, 'ok', `${choice.label} ${checkName} passed: ${health.url}`)
     return health
   }
-  writeStatus(output, ui, 'fail', `${choice.label} health check failed for ${baseUrl}: ${health.error || 'unreachable'}`)
+  const checkName = choice.id === RUNTIME_SETUP_HERMES || choice.profile === RUNTIME_SETUP_HERMES ? 'health check' : 'OpenAI-compatible /models check'
+  writeStatus(output, ui, 'fail', `${choice.label} ${checkName} failed for ${baseUrl}: ${health.error || 'unreachable'}`)
   return health
 }
 
@@ -1742,6 +1783,8 @@ function configuredRuntimeSetup(choice, runtime, runtimeOptions = {}) {
     model: runtime.model,
     profile: runtime.profile,
     runtimeAdapter: runtime.runtimeAdapter || '',
+    reachable: runtime.reachable === true || runtime.reachability?.ok === true,
+    reachability: runtime.reachability,
     runtimeOptions,
     runtime,
   }
@@ -1757,6 +1800,22 @@ function configuredDeepAgentsAcpRuntimeSetup({ choice, options = {}, output, ui 
   const runtimeInfo = detectLlmRuntime(runtimeOptions, {})
   writeStatus(output, ui, 'ok', `DeepAgents ACP adapter selected explicitly: ${formatRuntimeDetails(runtimeInfo)}. QuickStart will not prompt for an OpenAI-compatible endpoint on this path.`)
   return configuredRuntimeSetup(choice, runtimeInfo, runtimeOptions)
+}
+
+async function verifyPreconfiguredRuntimeSetup({ choice, runtimeInfo, output, ui, probe = probeRuntimeEndpoint } = {}) {
+  if (runtimeInfo.runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP && !runtimeInfo.baseUrl) {
+    return { ok: true, skipped: true, reason: 'adapter-only runtime path' }
+  }
+  if (!runtimeInfo.baseUrl) {
+    return { ok: false, error: 'no runtime base URL configured' }
+  }
+  return verifyRuntimeEndpointForChoice({
+    choice: { ...choice, profile: runtimeInfo.profile, label: choice.label || runtimeInfo.profile },
+    baseUrl: runtimeInfo.baseUrl,
+    output,
+    ui,
+    probe,
+  })
 }
 
 function runtimeOptionsFromRuntimeInfo(choice, runtime) {
@@ -2245,6 +2304,100 @@ function sourceUrlsFromStartedSources(sources = []) {
   return sources.map((source) => source.url).filter(Boolean)
 }
 
+function assertNoSelectedSourcePathConflicts(sources = [], { action = 'source selection' } = {}) {
+  const conflicts = selectedSourcePathConflicts(sources)
+  if (conflicts.length) {
+    throw new Error(formatSourceConflictError(conflicts, {
+      action,
+      intro: 'Selected source folders overlap by ancestor path.',
+      remediation: 'Select only one folder from each overlap group, then rerun. If both folders must be served, rebuild one source with a distinct source_id and start it separately.',
+    }))
+  }
+}
+
+function assertNoValidatedSourceIdConflicts(sources = [], { action = 'source startup' } = {}) {
+  const conflicts = selectedSourceIdConflicts(sources)
+  if (conflicts.length) {
+    throw new Error(formatSourceConflictError(conflicts, {
+      action,
+      intro: 'Selected source folders resolve to duplicate source_id values.',
+      remediation: 'Select only one folder for each source_id, or rebuild/rename one source so every started source has a unique source_id.',
+    }))
+  }
+}
+
+function selectedSourcePathConflicts(sources = []) {
+  const entries = sources
+    .map((source) => ({ source, path: source.path ? resolve(source.path) : '' }))
+    .filter((entry) => entry.path)
+  const conflicts = []
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const left = entries[leftIndex]
+      const right = entries[rightIndex]
+      if (pathsOverlapAsAncestor(left.path, right.path)) {
+        conflicts.push({
+          code: 'overlapping_source_paths',
+          detail: 'ancestor/descendant paths would create ambiguous bridge ownership',
+          sources: [left.source, right.source],
+        })
+      }
+    }
+  }
+  return conflicts
+}
+
+function selectedSourceIdConflicts(sources = []) {
+  const groups = new Map()
+  for (const source of sources) {
+    const id = sourceIdForConflictCheck(source)
+    if (!id) {
+      continue
+    }
+    const group = groups.get(id) || []
+    group.push(source)
+    groups.set(id, group)
+  }
+  return [...groups.entries()]
+    .filter(([, group]) => group.length > 1)
+    .map(([id, group]) => ({
+      code: 'duplicate_source_id',
+      detail: `duplicate source_id "${id}"`,
+      sources: group,
+    }))
+}
+
+function sourceIdForConflictCheck(source = {}) {
+  return String(source.id || source.sourceId || source.source_id || source.manifest?.source_id || '').trim()
+}
+
+function pathsOverlapAsAncestor(leftPath, rightPath) {
+  const left = normalizePath(leftPath)
+  const right = normalizePath(rightPath)
+  if (!left || !right || left === right) {
+    return false
+  }
+  return isPathAtOrBelowRoot(left, right) || isPathAtOrBelowRoot(right, left)
+}
+
+function formatSourceConflictError(conflicts = [], { action, intro, remediation } = {}) {
+  const lines = [
+    `Cannot continue ${action}: ${intro}`,
+  ]
+  for (const conflict of conflicts) {
+    lines.push(`- ${conflict.code}: ${conflict.detail}`)
+    for (const source of conflict.sources || []) {
+      const id = sourceIdForConflictCheck(source)
+      const idText = id ? ` id=${id}` : ''
+      const location = source.path ? `path=${source.path}` : `url=${source.url || 'n/a'}`
+      lines.push(`  -${idText} ${location}`)
+    }
+  }
+  lines.push(remediation)
+  lines.push('No source startup or registration was performed for this conflicting selection.')
+  return lines.join('\n')
+}
+
 function writeQuickstartPortFallbackInfo(output, ui, sources = []) {
   for (const source of sources) {
     const requestedPort = sourceRequestedPort(source)
@@ -2521,21 +2674,24 @@ function sourceMcpStreamUrl(sourceUrl) {
 
 function sourceEndpointUrl(sourceUrl, endpointPath) {
   const parsed = new URL(sourceUrl)
-  const basePath = parsed.pathname.replace(/\/+$/, '')
+  const basePath = trimTrailingSlash(parsed.pathname)
   parsed.pathname = `${basePath}${endpointPath}`
   parsed.search = ''
   parsed.hash = ''
   return trimTrailingSlash(parsed.toString())
 }
 
-function formatBridgeHandoff(bridgeUrl) {
+function formatBridgeHandoff(bridgeUrl, { smokeMode = '' } = {}) {
   const baseUrl = trimTrailingSlash(bridgeUrl)
+  const bodyLines = smokeMode === BRIDGE_MODE_EVIDENCE_ONLY
+    ? ['Bridge endpoints responded; evidence-only smoke did not check delegated-runtime reachability.']
+    : ['Ready bridge endpoints']
   return formatSummaryCard('Bridge handoff', [
     ['MCP JSON-RPC', `POST ${sourceEndpointUrl(baseUrl, '/mcp')}`],
     ['A2A answer', `POST ${sourceEndpointUrl(baseUrl, '/message:send')}`],
     ['Settings', sourceEndpointUrl(baseUrl, '/settings')],
     ['Base URL', baseUrl],
-  ], { bodyLines: ['Ready bridge endpoints'] }) + [
+  ], { bodyLines }) + [
     'Use the endpoint your agent or script supports; exact client configuration syntax varies by client.',
   ].join('\n') + '\n'
 }
@@ -4440,25 +4596,337 @@ export async function doctor({ bridgeUrl = DEFAULT_BRIDGE_URL, serveInvocation =
   return { checks }
 }
 
+export async function statusSources({ bridgeUrl = DEFAULT_BRIDGE_URL, configPath = defaultConfigPath(), sourceHealthTimeoutMs = DEFAULT_STATUS_SOURCE_HEALTH_TIMEOUT_MS, bridgeTimeoutMs = DEFAULT_STATUS_BRIDGE_TIMEOUT_MS } = {}) {
+  const resolvedConfigPath = resolve(configPath)
+  const warnings = []
+  let localSources = []
+  let configError = ''
+  const configExists = safeIsFile(resolvedConfigPath)
+  if (configExists) {
+    try {
+      localSources = readSourceConfig(resolvedConfigPath)
+    } catch (error) {
+      configError = error.message
+      warnings.push(statusWarning('source_config_unreadable', `Could not read source config: ${error.message}`))
+    }
+  } else {
+    warnings.push(statusWarning('source_config_missing', `Source config not found: ${resolvedConfigPath}`))
+  }
+
+  const bridge = await readBridgeStatus(bridgeUrl, { timeoutMs: bridgeTimeoutMs })
+  if (!bridge.health.ok) {
+    warnings.push(statusWarning('bridge_unreachable', `Bridge is not reachable at ${bridge.url}: ${bridge.health.error}`))
+  } else if (!bridge.registry.ok) {
+    warnings.push(statusWarning('bridge_registry_unreadable', `Bridge registry could not be read at ${bridge.url}: ${bridge.registry.error}`))
+  }
+
+  const registrySources = bridge.registry.sources || []
+  const sources = await Promise.all(localSources.map(async (source) => {
+    const liveHealth = await probeStatusSourceHealth(source, { timeoutMs: sourceHealthTimeoutMs })
+    const registration = reconcileSourceRegistration(source, registrySources, bridge)
+    return statusSourceDescriptor(source, {
+      health: liveHealth,
+      registration,
+    })
+  }))
+
+  warnings.push(...statusConflictWarnings(sources))
+  warnings.push(...sources
+    .filter((source) => source.registration.state === 'id-conflict')
+    .map((source) => statusWarning(
+      'source_id_registered_elsewhere',
+      `Source ${source.id} is started at ${source.url} but the bridge registry points that id at ${source.registration.registeredUrl}.`,
+      [source.id],
+    )))
+
+  return {
+    command: 'status',
+    generatedAt: new Date().toISOString(),
+    configPath: resolvedConfigPath,
+    configExists,
+    ...(configError ? { configError } : {}),
+    bridgeUrl: trimTrailingSlash(bridgeUrl),
+    bridge,
+    sources,
+    startedCount: sources.length,
+    healthyCount: sources.filter((source) => source.health.ok).length,
+    registeredCount: sources.filter((source) => source.registered === true).length,
+    unregisteredCount: sources.filter((source) => source.registered === false).length,
+    unknownRegistrationCount: sources.filter((source) => source.registered === null).length,
+    warningCount: warnings.length,
+    warnings,
+  }
+}
+
+async function readBridgeStatus(bridgeUrl, { timeoutMs = DEFAULT_STATUS_BRIDGE_TIMEOUT_MS } = {}) {
+  const url = trimTrailingSlash(bridgeUrl)
+  const health = await probeBridgeStatusHealth(url, { timeoutMs })
+  if (!health.ok) {
+    return {
+      url,
+      reachable: false,
+      health,
+      registry: { ok: false, sources: [], error: 'bridge health check failed' },
+    }
+  }
+  try {
+    const registry = await fetchJson(new URL('/settings/sources.json', url), { timeoutMs })
+    const sources = Array.isArray(registry.sources)
+      ? registry.sources.map(statusRegistrySourceDescriptor)
+      : []
+    return {
+      url,
+      reachable: true,
+      health,
+      registry: {
+        ok: true,
+        sources,
+        registeredCount: sources.length,
+        persistence: registry.persistence,
+      },
+    }
+  } catch (error) {
+    return {
+      url,
+      reachable: true,
+      health,
+      registry: {
+        ok: false,
+        sources: [],
+        error: error.message,
+      },
+    }
+  }
+}
+
+async function probeBridgeStatusHealth(bridgeUrl, { timeoutMs = DEFAULT_STATUS_BRIDGE_TIMEOUT_MS } = {}) {
+  try {
+    const health = await fetchJson(new URL('/health', bridgeUrl), { timeoutMs })
+    return {
+      ok: true,
+      status: health.status || 'reachable',
+      url: bridgeUrl,
+      sourceRegistry: health.sourceRegistry,
+      runtimeConnection: health.runtimeConnection,
+    }
+  } catch (error) {
+    return { ok: false, error: error.message, url: bridgeUrl }
+  }
+}
+
+async function probeStatusSourceHealth(source, { timeoutMs = DEFAULT_STATUS_SOURCE_HEALTH_TIMEOUT_MS } = {}) {
+  if (!source?.url) {
+    return { ok: false, error: 'missing source URL' }
+  }
+  try {
+    const health = await fetchJson(new URL('/health', source.url), { timeoutMs })
+    return {
+      ok: true,
+      status: health.status || 'reachable',
+      url: normalizeStatusUrl(source.url),
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message,
+      url: normalizeStatusUrl(source.url),
+    }
+  }
+}
+
+function reconcileSourceRegistration(source, registrySources = [], bridge = {}) {
+  if (!bridge.reachable || !bridge.registry?.ok) {
+    return {
+      state: 'unknown',
+      registered: null,
+      reason: bridge.reachable ? 'bridge registry unavailable' : 'bridge unreachable',
+    }
+  }
+  const sourceUrl = normalizeStatusUrl(source.url)
+  const idMatches = registrySources.filter((candidate) => String(candidate.id || '') === String(source.id || ''))
+  const exactIdMatch = idMatches.find((candidate) => normalizeStatusUrl(candidate.url) === sourceUrl)
+  if (exactIdMatch) {
+    return {
+      state: 'registered',
+      registered: true,
+      match: 'id+url',
+      registeredId: exactIdMatch.id,
+      registeredUrl: exactIdMatch.url,
+      selected: exactIdMatch.selected,
+    }
+  }
+  const urlMatch = registrySources.find((candidate) => normalizeStatusUrl(candidate.url) === sourceUrl)
+  if (urlMatch) {
+    return {
+      state: 'registered',
+      registered: true,
+      match: 'url',
+      registeredId: urlMatch.id,
+      registeredUrl: urlMatch.url,
+      selected: urlMatch.selected,
+    }
+  }
+  if (idMatches.length) {
+    const registered = idMatches[0]
+    return {
+      state: 'id-conflict',
+      registered: false,
+      match: 'id',
+      registeredId: registered.id,
+      registeredUrl: registered.url,
+      selected: registered.selected,
+      reason: 'same source id is registered with a different URL',
+    }
+  }
+  return {
+    state: 'not-registered',
+    registered: false,
+    reason: 'not found in bridge registry',
+  }
+}
+
+function statusSourceDescriptor(source = {}, { health, registration } = {}) {
+  const processId = source.processId || source.pid || null
+  const manifest = source.manifest || {}
+  return {
+    id: source.id || manifest.source_id || '',
+    name: source.name || source.title || source.id || '',
+    title: source.title || source.name || source.id || '',
+    url: normalizeStatusUrl(source.url || ''),
+    path: source.path || source.root || '',
+    root: source.root || source.path || '',
+    protocol: source.protocol || 'llmwiki-http',
+    status: source.status || '',
+    selected: source.selected !== false,
+    processId,
+    processAlive: processId ? processIsAlive(processId) : null,
+    runnerProcessId: source.runnerProcessId,
+    manifest,
+    bundle_id: manifest.bundle_id,
+    bundleId: manifest.bundleId || manifest.bundle_id,
+    page_count: manifest.page_count,
+    pageCount: manifest.pageCount ?? manifest.page_count,
+    approved_page_count: manifest.approved_page_count,
+    approvedPageCount: manifest.approvedPageCount ?? manifest.approved_page_count,
+    health,
+    registered: registration?.registered ?? null,
+    registration: registration || { state: 'unknown', registered: null },
+    logs: source.logs,
+  }
+}
+
+function statusRegistrySourceDescriptor(source = {}) {
+  return {
+    id: source.id || '',
+    name: source.name || source.title || source.id || '',
+    title: source.title || source.name || source.id || '',
+    url: normalizeStatusUrl(source.url || ''),
+    protocol: source.protocol || 'llmwiki-http',
+    status: source.status || '',
+    selected: source.selected !== false,
+    root: source.root || source.path || '',
+    bundleId: source.bundleId || source.bundle_id,
+    pageCount: source.pageCount ?? source.page_count,
+    approvedPageCount: source.approvedPageCount ?? source.approved_page_count,
+  }
+}
+
+function statusConflictWarnings(sources = []) {
+  return [
+    ...selectedSourceIdConflicts(sources).map((conflict) => statusWarning(
+      conflict.code,
+      conflict.detail,
+      conflict.sources.map((source) => source.id).filter(Boolean),
+    )),
+    ...selectedSourcePathConflicts(sources).map((conflict) => statusWarning(
+      conflict.code,
+      conflict.detail,
+      conflict.sources.map((source) => source.id).filter(Boolean),
+    )),
+  ]
+}
+
+function statusWarning(code, message, sourceIds = []) {
+  return {
+    severity: 'warning',
+    code,
+    message,
+    ...(sourceIds.length ? { sourceIds } : {}),
+  }
+}
+
+function processIsAlive(pid) {
+  if (!pid) {
+    return null
+  }
+  try {
+    process.kill(Number(pid), 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function normalizeStatusUrl(value) {
+  const text = String(value || '').trim()
+  if (!text) {
+    return ''
+  }
+  try {
+    return redactUrlCredentials(text)
+  } catch {
+    return trimTrailingSlash(text)
+  }
+}
+
+function redactUrlCredentials(value) {
+  if (!value) {
+    return ''
+  }
+  const parsed = new URL(value)
+  parsed.username = ''
+  parsed.password = ''
+  return trimTrailingSlash(parsed.toString())
+}
+
 export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEFAULT_PORT_START, ports = [], serveInvocation = resolveServeInvocation({}), configPath = defaultConfigPath(), logDir = defaultLogDir(), healthTimeoutMs = DEFAULT_SOURCE_HEALTH_TIMEOUT_MS, healthIntervalMs = DEFAULT_SOURCE_HEALTH_INTERVAL_MS } = {}) {
   if (!paths?.length) {
     throw new Error('start requires at least one --path')
   }
   mkdirSync(logDir, { recursive: true })
+  const sourcePlans = []
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = resolve(paths[index])
+    if (!safeIsDirectory(path)) {
+      throw new Error(`Source path is not a directory: ${path}`)
+    }
+    sourcePlans.push({ index, path })
+  }
+  assertNoSelectedSourcePathConflicts(sourcePlans, { action: 'source startup' })
+  for (const plan of sourcePlans) {
+    const manifest = await llmwikiServeJson(serveInvocation, ['manifest', plan.path], { timeoutMs: 30000 })
+    const sourceId = manifest.source_id || slug(manifest.title || basename(plan.path))
+    Object.assign(plan, {
+      manifest,
+      sourceId,
+      summarizedManifest: summarizeManifest(manifest),
+    })
+  }
+  assertNoValidatedSourceIdConflicts(sourcePlans.map((plan) => ({
+    id: plan.sourceId,
+    path: plan.path,
+    manifest: plan.summarizedManifest,
+  })), { action: 'source startup' })
+
   const sources = []
   const startedProcesses = []
   const assignedPorts = new Set()
   try {
-    for (let index = 0; index < paths.length; index += 1) {
-      const path = resolve(paths[index])
-      if (!safeIsDirectory(path)) {
-        throw new Error(`Source path is not a directory: ${path}`)
-      }
+    for (const plan of sourcePlans) {
+      const { index, path, manifest, sourceId, summarizedManifest } = plan
       const requestedPort = ports[index] || portStart + index
       const port = await nextAvailablePort(requestedPort, { host, unavailable: assignedPorts })
       assignedPorts.add(port)
-      const manifest = await llmwikiServeJson(serveInvocation, ['manifest', path], { timeoutMs: 30000 })
-      const sourceId = manifest.source_id || slug(manifest.title || basename(path))
       const out = join(logDir, `${sourceId}-${port}.out.log`)
       const err = join(logDir, `${sourceId}-${port}.err.log`)
       const outFd = openSync(out, 'a')
@@ -4507,7 +4975,7 @@ export async function startSources({ paths, host = DEFAULT_HOST, portStart = DEF
         ...(port !== requestedPort ? { portFallback: { requestedPort, assignedPort: port, reason: 'requested-port-occupied' } } : {}),
         processId,
         runnerProcessId: serverProcessId && serverProcessId !== child.pid ? child.pid : undefined,
-        manifest: summarizeManifest(manifest),
+        manifest: summarizedManifest,
         health,
         logs,
       })
@@ -4821,6 +5289,11 @@ export async function registerSources({ bridgeUrl = DEFAULT_BRIDGE_URL, configPa
   const normalized = sources.map((source, index) => normalizeBridgeSource(source, {
     selected: selectedIds.size ? selectedIds.has(source.id) : (source.selected ?? (selectFirst && index === 0)),
   }))
+  assertNoValidatedSourceIdConflicts(normalized.map((source) => ({
+    id: source.id,
+    path: source.path,
+    url: source.url,
+  })), { action: 'source registration' })
 
   const existing = replace ? [] : await readExistingBridgeSources(bridgeUrl)
   const merged = applySelectedIds(mergeBridgeSources(existing, normalized), selectedIds)
@@ -4894,7 +5367,7 @@ export function mergeBridgeSources(existing, incoming) {
 
 function sameBridgeSource(left, right) {
   return Boolean(left.id && right.id && left.id === right.id)
-    || Boolean(left.url && right.url && left.url.replace(/\/+$/, '') === right.url.replace(/\/+$/, ''))
+    || Boolean(left.url && right.url && trimTrailingSlash(left.url) === trimTrailingSlash(right.url))
 }
 
 function assertSafeSourceUrl(value) {
@@ -4905,7 +5378,7 @@ function assertSafeSourceUrl(value) {
   if (parsed.username || parsed.password) {
     throw new Error('Source URL must not contain credentials.')
   }
-  return parsed.toString().replace(/\/+$/, '')
+  return trimTrailingSlash(parsed.toString())
 }
 
 export function bridgeStartPlan(options = {}) {
@@ -5246,13 +5719,12 @@ export async function probeRuntimeEndpoint({ baseUrl, profile = 'generic', timeo
   const normalizedBaseUrl = normalizeRuntimeBaseUrl(baseUrl)
   const runtimeProfile = parseRuntimeProfile(profile, 'generic')
   if (runtimeProfile !== RUNTIME_SETUP_HERMES) {
-    return {
-      ok: true,
-      skipped: true,
-      profile: runtimeProfile,
+    return probeOpenAiCompatibleRuntimeEndpoint({
       baseUrl: normalizedBaseUrl,
-      reason: 'no registered framework health probe',
-    }
+      profile: runtimeProfile,
+      timeoutMs,
+      fetchRuntimeJson,
+    })
   }
   const healthUrls = hermesHealthUrls(normalizedBaseUrl)
   const errors = []
@@ -5283,10 +5755,43 @@ export async function probeRuntimeEndpoint({ baseUrl, profile = 'generic', timeo
   }
 }
 
+async function probeOpenAiCompatibleRuntimeEndpoint({ baseUrl, profile, timeoutMs = DEFAULT_RUNTIME_REACHABILITY_TIMEOUT_MS, fetchRuntimeJson = fetchJson } = {}) {
+  const modelsUrl = openAiCompatibleModelsUrl(baseUrl)
+  try {
+    await fetchRuntimeJson(modelsUrl, { timeoutMs })
+    return {
+      ok: true,
+      profile,
+      baseUrl,
+      url: modelsUrl,
+      status: 'reachable',
+      endpoint: 'models',
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      profile,
+      baseUrl,
+      url: modelsUrl,
+      endpoint: 'models',
+      error: error.message,
+    }
+  }
+}
+
+function openAiCompatibleModelsUrl(baseUrl) {
+  const parsed = new URL(baseUrl)
+  const basePath = trimTrailingSlash(parsed.pathname)
+  parsed.pathname = `${basePath || ''}/models`
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.toString()
+}
+
 function hermesHealthUrls(baseUrl) {
   const parsed = new URL(baseUrl)
   const origin = `${parsed.protocol}//${parsed.host}`
-  const basePath = parsed.pathname.replace(/\/+$/, '')
+  const basePath = trimTrailingSlash(parsed.pathname)
   const paths = ['/health']
   if (basePath && basePath !== '/') {
     paths.push(`${basePath}/health`)
@@ -5418,10 +5923,15 @@ function bridgeModeOption(value, fallback) {
 }
 
 function trimTrailingSlash(value) {
-  return String(value || '').replace(/\/+$/, '')
+  const text = String(value || '')
+  let end = text.length
+  while (end > 0 && text.charCodeAt(end - 1) === 47) {
+    end -= 1
+  }
+  return end === text.length ? text : text.slice(0, end)
 }
 
-export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_BRIDGE_URL, env = process.env, inspectBridgeRuntime = inspectBridgeRuntimeConfiguration } = {}) {
+export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_BRIDGE_URL, env = process.env, inspectBridgeRuntime = inspectBridgeRuntimeConfiguration, probeRuntime = probeRuntimeEndpoint } = {}) {
   const requestedMode = stringOption(options.mode ?? options['orchestration-mode'], '')
   if (requestedMode) {
     return { mode: bridgeModeOption(requestedMode, BRIDGE_MODE_EVIDENCE_ONLY), reason: 'requested with --mode' }
@@ -5433,8 +5943,18 @@ export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_
 
   const runtimeInfo = detectLlmRuntime(options, env)
   if (runtimeInfo.configured) {
+    if (runtimeInfo.baseUrl) {
+      const readiness = await probeRuntime({ baseUrl: runtimeInfo.baseUrl, profile: runtimeInfo.profile })
+      if (!readiness.ok) {
+        return {
+          mode: BRIDGE_MODE_EVIDENCE_ONLY,
+          reason: `explicit LLM endpoint was configured but not reachable (${readiness.error || 'runtime probe failed'})`,
+          runtimeReachability: readiness,
+        }
+      }
+    }
     const reason = runtimeInfo.baseUrl
-      ? `explicit LLM endpoint configured (${runtimeInfo.baseUrl})`
+      ? `explicit LLM endpoint configured and reachable (${runtimeInfo.baseUrl})`
       : `explicit runtime adapter configured (${runtimeInfo.runtimeAdapter})`
     return { mode: BRIDGE_MODE_DELEGATED_RUNTIME, reason }
   }
@@ -5451,30 +5971,163 @@ export async function selectBridgeSmokeMode({ options = {}, bridgeUrl = DEFAULT_
 }
 
 async function inspectBridgeRuntimeConfiguration(bridgeUrl) {
-  const settings = await fetchJson(new URL('/settings.json', bridgeUrl), { timeoutMs: 2000 })
-  const connection = settings.runtimeConnection || {}
-  const baseUrl = String(connection.baseUrl || '')
-  const configuredBaseUrl = baseUrl
-    && baseUrl !== 'none'
-    && trimTrailingSlash(baseUrl) !== trimTrailingSlash(DEFAULT_BRIDGE_RUNTIME_BASE_URL)
-  if (connection.modelConfigured && (configuredBaseUrl || connection.apiKeyConfigured)) {
-    return { configured: true, reason: 'LLM endpoint configured in bridge settings' }
+  const runtimeStatus = await inspectBridgeRuntimeForSmoke(bridgeUrl)
+  if (runtimeStatus.configured && runtimeStatus.reachable) {
+    return { configured: true, reason: runtimeStatus.reason, runtimeStatus }
   }
-  return { configured: false, reason: 'no explicit LLM endpoint detected in bridge settings' }
+  return {
+    configured: false,
+    reason: runtimeStatus.reason || 'no reachable LLM endpoint detected in bridge settings',
+    runtimeStatus,
+  }
 }
 
-export async function smokeBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, query, mode = BRIDGE_MODE_EVIDENCE_ONLY } = {}) {
-  const smokeMode = bridgeModeOption(mode, BRIDGE_MODE_EVIDENCE_ONLY)
-  const response = await fetchJson(new URL('/message:send', bridgeUrl), {
-    method: 'POST',
-    body: JSON.stringify({ data: { query, mode: smokeMode } }),
-    headers: { 'content-type': 'application/json' },
-    timeoutMs: 30000,
+async function inspectBridgeRuntimeForSmoke(bridgeUrl, { runtime = null, probeRuntime = probeRuntimeEndpoint, timeoutMs = DEFAULT_RUNTIME_REACHABILITY_TIMEOUT_MS } = {}) {
+  const runtimeInfo = runtime?.configured
+    ? runtime
+    : await bridgeRuntimeInfoFromSettings(bridgeUrl)
+  if (!runtimeInfo.configured) {
+    return {
+      configured: false,
+      reachable: false,
+      reason: runtimeInfo.reason || 'no runtime endpoint is configured',
+      runtime: runtimeInfo,
+    }
+  }
+  if (runtimeInfo.runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP && !runtimeInfo.baseUrl) {
+    return {
+      configured: true,
+      reachable: true,
+      checked: false,
+      reason: 'explicit runtime adapter configured; OpenAI-compatible endpoint probe is not applicable',
+      runtime: runtimeInfo,
+    }
+  }
+  if (!runtimeInfo.baseUrl) {
+    return {
+      configured: false,
+      reachable: false,
+      reason: 'runtime is configured without a base URL',
+      runtime: runtimeInfo,
+    }
+  }
+  const reachability = await probeRuntime({
+    baseUrl: runtimeInfo.baseUrl,
+    profile: runtimeInfo.profile || 'generic',
+    timeoutMs,
   })
+  if (!reachability.ok) {
+    return {
+      configured: true,
+      reachable: false,
+      reason: `runtime endpoint is configured but not reachable (${reachability.error || 'probe failed'})`,
+      runtime: runtimeInfo,
+      reachability,
+    }
+  }
+  return {
+    configured: true,
+    reachable: true,
+    checked: true,
+    reason: `runtime endpoint is configured and reachable (${runtimeInfo.baseUrl})`,
+    runtime: runtimeInfo,
+    reachability,
+  }
+}
+
+async function bridgeRuntimeInfoFromSettings(bridgeUrl) {
+  try {
+    const settings = await fetchJson(new URL('/settings.json', bridgeUrl), { timeoutMs: DEFAULT_STATUS_BRIDGE_TIMEOUT_MS })
+    const connection = settings.runtimeConnection || {}
+    const runtime = settings.runtime || {}
+    const runtimeAdapter = parseRuntimeAdapterOption(runtime.adapter || settings.runtimeAdapter) || ''
+    const profile = parseRuntimeProfile(runtime.profile || settings.runtimeProfile || connection.runtimeProfile || 'generic', 'generic')
+    const model = String(connection.model || settings.model || '').trim()
+      || (connection.modelConfigured ? 'configured-model' : '')
+    const rawBaseUrl = String(connection.baseUrl || settings.baseUrl || '').trim()
+    const baseUrl = runtimeBaseUrlFromSettings(rawBaseUrl)
+    const configured = Boolean(
+      runtimeAdapter === RUNTIME_ADAPTER_DEEPAGENTS_ACP
+      || (baseUrl && baseUrl !== 'none' && connection.modelConfigured),
+    )
+    return {
+      configured,
+      baseUrl: baseUrl === 'none' ? '' : baseUrl,
+      model,
+      profile,
+      runtimeAdapter,
+      modelConfigured: Boolean(connection.modelConfigured),
+      baseUrlSource: connection.baseUrlSource || '',
+      reason: configured ? 'runtime settings found on bridge' : 'no model runtime configured in bridge settings',
+    }
+  } catch (error) {
+    return {
+      configured: false,
+      baseUrl: '',
+      model: '',
+      profile: 'generic',
+      runtimeAdapter: '',
+      reason: `could not inspect bridge runtime settings: ${error.message}`,
+      error: error.message,
+    }
+  }
+}
+
+function runtimeBaseUrlFromSettings(value) {
+  if (!value || value === 'none') {
+    return ''
+  }
+  try {
+    return normalizeRuntimeBaseUrl(value)
+  } catch {
+    return ''
+  }
+}
+
+function formatDelegatedRuntimePreflightError(bridgeUrl, runtimeStatus = {}) {
+  const settingsUrl = sourceEndpointUrl(trimTrailingSlash(bridgeUrl), '/settings')
+  const runtime = runtimeStatus.runtime || {}
+  const target = runtime.baseUrl ? ` Runtime endpoint: ${runtime.baseUrl}.` : ''
+  return [
+    `Delegated-runtime smoke requires a reachable model runtime before it can be reported ready.${target}`,
+    runtimeStatus.reason || 'Runtime reachability could not be verified.',
+    `Configure the bridge runtime at ${settingsUrl}, start the endpoint, or rerun smoke with --mode evidence-only to test sources only.`,
+  ].join(' ')
+}
+
+export async function smokeBridge({ bridgeUrl = DEFAULT_BRIDGE_URL, query, mode = BRIDGE_MODE_EVIDENCE_ONLY, runtime = null, preflightRuntime = true, probeRuntime = probeRuntimeEndpoint } = {}) {
+  const smokeMode = bridgeModeOption(mode, BRIDGE_MODE_EVIDENCE_ONLY)
+  const warnings = []
+  let runtimeReachability = null
+  if (smokeMode === BRIDGE_MODE_EVIDENCE_ONLY) {
+    warnings.push('Evidence-only smoke did not check delegated-runtime reachability.')
+  } else if (preflightRuntime) {
+    runtimeReachability = await inspectBridgeRuntimeForSmoke(bridgeUrl, { runtime, probeRuntime })
+    if (!runtimeReachability.configured || !runtimeReachability.reachable) {
+      throw new Error(formatDelegatedRuntimePreflightError(bridgeUrl, runtimeReachability))
+    }
+  }
+  let response
+  try {
+    response = await fetchJson(new URL('/message:send', bridgeUrl), {
+      method: 'POST',
+      body: JSON.stringify({ data: { query, mode: smokeMode } }),
+      headers: { 'content-type': 'application/json' },
+      timeoutMs: 30000,
+    })
+  } catch (error) {
+    if (smokeMode !== BRIDGE_MODE_EVIDENCE_ONLY) {
+      throw new Error(`${error.message} Configure the model runtime at ${sourceEndpointUrl(trimTrailingSlash(bridgeUrl), '/settings')}, verify it is reachable, or rerun with --mode evidence-only to test sources only.`)
+    }
+    throw error
+  }
   return {
     bridgeUrl,
     query,
     mode: smokeMode,
+    runtimeChecked: smokeMode !== BRIDGE_MODE_EVIDENCE_ONLY && Boolean(preflightRuntime),
+    ...(runtimeReachability ? { runtimeReachability } : {}),
+    ...(warnings.length ? { warnings } : {}),
     status: response.status,
     text: response.status?.message?.parts?.find((part) => part.kind === 'text')?.text || '',
   }
@@ -5677,7 +6330,87 @@ function writeResult(result, options, io) {
     io.stdout.write(formatCandidates(result.candidates))
     return
   }
+  if (result?.command === 'status') {
+    io.stdout.write(formatStatusResult(result))
+    return
+  }
   io.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+function formatStatusResult(result = {}) {
+  const lines = []
+  const bridgeState = result.bridge?.health?.ok
+    ? `reachable (${result.bridge.health.status || 'ok'})`
+    : `unreachable (${result.bridge?.health?.error || 'not checked'})`
+  const registryState = result.bridge?.registry?.ok
+    ? `${result.bridge.registry.registeredCount || 0} registered`
+    : `unavailable (${result.bridge?.registry?.error || 'not checked'})`
+  lines.push(`Source config: ${result.configExists ? result.configPath : `${result.configPath} (missing)`}`)
+  lines.push(`Bridge: ${result.bridgeUrl} - ${bridgeState}; registry ${registryState}`)
+  lines.push(`Sources: ${result.startedCount || 0} local, ${result.healthyCount || 0} healthy, ${result.registeredCount || 0} registered`)
+  if (!result.sources?.length) {
+    lines.push('No local started sources found.')
+  } else {
+    lines.push(formatStatusSourceTable(result.sources))
+  }
+  if (result.warnings?.length) {
+    lines.push('')
+    lines.push('Warnings:')
+    for (const warning of result.warnings) {
+      lines.push(`- ${warning.code}: ${warning.message}`)
+    }
+  }
+  lines.push('')
+  lines.push(`Note: ${pathRedactionNoticeText()}`)
+  return `${lines.join('\n')}\n`
+}
+
+function formatStatusSourceTable(sources = []) {
+  const rows = [
+    ['ID', 'URL', 'ROOT', 'HEALTH', 'REGISTERED', 'PID'],
+    ...sources.map((source) => [
+      source.id || '',
+      source.url || '',
+      source.root || source.path || '',
+      formatStatusHealth(source),
+      formatStatusRegistration(source),
+      formatStatusPid(source),
+    ]),
+  ]
+  const widths = rows[0].map((_, column) => Math.max(...rows.map((row) => String(row[column] || '').length)))
+  return rows
+    .map((row) => row.map((cell, column) => String(cell || '').padEnd(widths[column])).join('  ').trimEnd())
+    .join('\n')
+}
+
+function formatStatusHealth(source = {}) {
+  if (source.health?.ok) {
+    return source.health.status || 'ok'
+  }
+  return source.health?.error ? 'fail' : 'unknown'
+}
+
+function formatStatusRegistration(source = {}) {
+  if (source.registration?.state === 'registered') {
+    return source.registration.selected === false ? 'yes (unselected)' : 'yes'
+  }
+  if (source.registration?.state === 'id-conflict') {
+    return `no (id at ${source.registration.registeredUrl || 'other URL'})`
+  }
+  if (source.registration?.state === 'not-registered') {
+    return 'no'
+  }
+  return 'unknown'
+}
+
+function formatStatusPid(source = {}) {
+  if (!source.processId) {
+    return ''
+  }
+  if (source.processAlive === null) {
+    return String(source.processId)
+  }
+  return `${source.processId} ${source.processAlive ? 'alive' : 'stale'}`
 }
 
 function formatCandidates(candidates) {
@@ -5708,7 +6441,8 @@ Usage:
   llmwiki-bridge-start discover [--home|--workspace|--cwd|--path DIR] [--validate] [--min-score 30] [--serve-command CMD] [--json]
   llmwiki-bridge-start start --path DIR [--port 11001] [--serve-command CMD]
   llmwiki-bridge-start register [--bridge URL] [--config FILE] [--replace]
-  llmwiki-bridge-start smoke [--bridge URL] [--query TEXT] [--mode evidence-only|delegated-runtime|hybrid]
+  llmwiki-bridge-start status|ls [--bridge URL] [--config FILE] [--json]
+  llmwiki-bridge-start smoke [--bridge URL] [--query TEXT] [--mode evidence-only|delegated-runtime|hybrid] [--llm-endpoint URL] [--runtime-profile PROFILE]
   llmwiki-bridge-start doctor [--bridge URL]
 
 Commands:
@@ -5716,7 +6450,9 @@ Commands:
   discover  Find likely LLMWiki Markdown, Native, Obsidian, Logseq, Dendron, Foam, or Quartz roots.
   start     Start llmwiki-serve for explicit source paths and write a source config.
   register  Upsert started or explicit sources in llmwiki-agent-bridge settings.
-  smoke     Run a small bridge query; defaults to evidence-only.
+  status    List local started sources with live health and bridge registration state.
+  ls        Alias for status.
+  smoke     Run a small bridge query; defaults to evidence-only and says when delegated runtime was not checked.
   doctor    Check local tool and bridge readiness.
 
 Quickstart shows recommended LLMWiki source folders first; use --include-additional for advanced/lower-priority app vaults, examples, demos, and starter/e2e sources.
@@ -5728,7 +6464,7 @@ Bridge setup is optional. Started source URLs can be used directly without llmwi
 After bridge setup approval, quickstart asks for runtime setup: skip/evidence-only, Hermes, or DeepAgents.
 Use --runtime-adapter deepagents-acp only when explicitly opting into the DeepAgents ACP bridge adapter; DeepAgents without that flag keeps the existing endpoint-based compatibility path.
 If a selected runtime CLI is missing, interactive quickstart may offer an official installer after explicit approval; --yes automation still requires --install-runtime.
-Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode.
+Bridge smoke defaults to evidence-only unless --mode or quickstart runtime setup/detection selects another mode. Delegated-runtime smoke verifies runtime reachability first; generic OpenAI-compatible endpoints use /models and Hermes uses /health or /v1/health.
 Use --serve-command/--serve-arg/--serve-cwd when llmwiki-serve is not on PATH.
 `
 }
