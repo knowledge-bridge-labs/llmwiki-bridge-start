@@ -35,6 +35,14 @@ scripts that support MCP over HTTP; exact client configuration syntax varies by
 client. `llmwiki-agent-bridge` can still be added later when you want source
 fan-out or one normalized bridge across sources.
 
+After a quickstart run, inspect what is still running and whether each source
+is registered with the bridge:
+
+```bash
+npx llmwiki-bridge-start@latest status --bridge http://127.0.0.1:8788
+npx llmwiki-bridge-start@latest status --json
+```
+
 If `llmwiki-serve` is not on `PATH`, a sibling `../llmwiki-serve` checkout with
 an existing `.venv` is used automatically when available. Otherwise point the
 harness at a local checkout or environment explicitly, for example:
@@ -71,7 +79,7 @@ transcripts are unchanged. Use `--no-clear-screen` or
 visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
-`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.2.1`;
+`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.3.0`;
 custom `--bridge http://host:port` values are reflected in those env
 assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
@@ -100,6 +108,12 @@ endpoint is shown, it came from an explicit CLI flag, the standard
 such as Hermes `/health`; blank Enter uses that verified/configured default,
 and `skip` forces evidence-only. If no default endpoint is shown, blank Enter
 or `skip` continues with evidence-only bridge smoke.
+Configured and reachable are separate states. Quickstart and delegated-runtime
+smoke do not treat an endpoint as usable just because a default or settings
+value exists. Hermes endpoints must answer `/health` or `/v1/health`; generic
+OpenAI-compatible endpoints must answer a minimal `/models` probe. Evidence-only
+smoke explicitly skips the delegated-runtime check and verifies source
+retrieval only.
 DeepAgents ACP is an explicit bridge adapter path, not the default DeepAgents
 profile behavior. Use `--runtime-adapter deepagents-acp` when you want
 QuickStart to configure `runtimeAdapter=deepagents-acp`; a background bridge
@@ -119,7 +133,10 @@ endpoint (`POST /message:send`), MCP-style JSON-RPC endpoint (`POST /mcp`),
 settings UI (`/settings`), and a compact operational details section that
 points to `.llmwiki-bridge-start/quickstart-handoff.md` for PIDs, log paths,
 and stop guidance. The bridge endpoint handoff is separate from direct source
-MCP Streamable HTTP URLs (`/mcp/stream`). If an explicit LLM
+MCP Streamable HTTP URLs (`/mcp/stream`). Use an `llmwiki-agent-bridge` build
+with MCP lifecycle support when registering the bridge `POST /mcp` endpoint
+with spec-compliant MCP clients; direct source URLs continue to use
+`/mcp/stream`. If an explicit LLM
 endpoint is configured through flags, quickstart treats it as a preconfigured
 compatibility path without adding it to the interactive first-run menu.
 
@@ -179,6 +196,7 @@ npx llmwiki-bridge-start@latest discover --home
 npx llmwiki-bridge-start@latest discover --path . --validate
 npx llmwiki-bridge-start@latest start --path ./wiki --port 11001
 npx llmwiki-bridge-start@latest register --bridge http://127.0.0.1:8788 --config .llmwiki-bridge-start/sources.json
+npx llmwiki-bridge-start@latest status --bridge http://127.0.0.1:8788
 npx llmwiki-bridge-start@latest smoke --bridge http://127.0.0.1:8788
 ```
 
@@ -217,7 +235,8 @@ longer compatibility notes and non-goals.
 | `discover` | Find local LLMWiki Markdown, Native LLMWiki/OpenWiki, Obsidian, Logseq, Foam, Dendron, Quartz, and generic Markdown candidates. |
 | `start` | Start `llmwiki-serve` on one or more selected local wiki paths. |
 | `register` | Upsert started or existing source URLs into `llmwiki-agent-bridge`. Use `--replace` only when intentionally replacing the registry. |
-| `smoke` | Run a bridge smoke request; defaults to evidence-only and accepts delegated-runtime or hybrid with `--mode`. |
+| `status` / `ls` | List local started sources from `.llmwiki-bridge-start/sources.json`, live source health, and bridge registration state when the bridge is reachable. |
+| `smoke` | Run a bridge smoke request; defaults to evidence-only and accepts delegated-runtime or hybrid with `--mode`. Evidence-only reports that delegated-runtime was not checked; delegated-runtime verifies runtime reachability first. |
 | `doctor` | Check local prerequisites and optional bridge reachability. |
 
 ## Boundary

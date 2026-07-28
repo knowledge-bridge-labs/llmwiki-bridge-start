@@ -173,6 +173,12 @@ onboarding harness.
   boxed `KBL / Knowledge Bridge Labs` logo after each visible-screen
   transition, so each focused question/screen has clear product identity.
   Non-TTY and redirected transcripts keep only the initial banner.
+- Release prep on 2026-07-28: target npm package version is
+  `llmwiki-bridge-start@0.0.3`. The deterministic default bridge start package
+  is now `llmwiki-agent-bridge@0.3.0`, matching the intended bridge release
+  candidate that includes MCP lifecycle support. User-facing
+  `llmwiki-bridge-start` examples continue to use `@latest` where they already
+  describe installing the current harness package.
 
 ## Validation
 
@@ -344,6 +350,12 @@ onboarding harness.
     `hermes gateway`; DeepAgents installation still does not imply a
     bridge-callable endpoint.
   - `npm test` passed with 103 Node tests.
+- Release prep for `0.0.3`:
+  - Package metadata is prepared for `llmwiki-bridge-start@0.0.3`.
+  - Default bridge startup now uses
+    `llmwiki-agent-bridge@0.3.0` instead of `0.2.1`.
+  - This package should be published only after
+    `llmwiki-agent-bridge@0.3.0` is available on npm.
 
 ## Commits
 
@@ -375,8 +387,12 @@ onboarding harness.
 
 ## Follow-ups
 
-- Register npm Trusted Publisher for `knowledge-bridge-labs/llmwiki-bridge-start`
-  with workflow `publish.yml` and environment `npm`.
+- Confirm npm Trusted Publisher registration for
+  `knowledge-bridge-labs/llmwiki-bridge-start` with workflow `publish.yml` and
+  environment `npm`.
+- Publish `llmwiki-agent-bridge@0.3.0` before releasing
+  `llmwiki-bridge-start@0.0.3`, so the default `npx` bridge path resolves for
+  users.
 - Publish only after explicit owner approval for the exact package/version.
 - Add public `llmwiki-docs` links after the npm release path is stable.
 - Add Compose/k3s/Helm onboarding only after native local validation remains
