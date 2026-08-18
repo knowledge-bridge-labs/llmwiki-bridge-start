@@ -34,6 +34,9 @@ These are MCP-over-HTTP/Streamable HTTP server URLs for coding agents or
 scripts that support MCP over HTTP; exact client configuration syntax varies by
 client. `llmwiki-agent-bridge` can still be added later when you want source
 fan-out or one normalized bridge across sources.
+SQLite GraphStore is configured on `llmwiki-serve`: version `0.2.10` and newer
+include it in the base serve package, it remains off by default, and no bridge
+or chat extra is required.
 
 After a quickstart run, inspect what is still running and whether each source
 is registered with the bridge:
@@ -79,7 +82,7 @@ transcripts are unchanged. Use `--no-clear-screen` or
 visible. If
 you opt in, quickstart uses an already running bridge or prints copy-pasteable
 PowerShell and POSIX manual-start examples such as
-`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.3.0`;
+`LLMWIKI_AGENT_BRIDGE_HOST='127.0.0.1' LLMWIKI_AGENT_BRIDGE_PORT='8788' npx --yes llmwiki-agent-bridge@0.4.0`;
 custom `--bridge http://host:port` values are reflected in those env
 assignments. The command does not install a global package.
 Before starting that bridge command, quickstart asks how to configure the LLM
